@@ -1,0 +1,21 @@
+# deps
+node_modules/
+
+# foundry
+contracts/out/
+contracts/cache/
+contracts/broadcast/
+
+# next.js
+web/.next/
+web/out/
+*.tsbuildinfo
+
+# env / secrets — never commit keys
+.env
+.env.local
+.env*.local
+
+# misc
+.DS_Store
+*.log

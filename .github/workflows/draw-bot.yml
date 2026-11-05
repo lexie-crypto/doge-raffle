@@ -1,0 +1,27 @@
+name: draw-bot
+
+on:
+  schedule:
+    - cron: "*/15 * * * *" # every 15 minutes
+  workflow_dispatch: {}
+
+concurrency:
+  group: draw-bot
+  cancel-in-progress: false
+
+jobs:
+  draw:
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+      - run: npm install --omit=dev
+        working-directory: bot
+      - run: node draw-bot.mjs
+        working-directory: bot
+        env:
+          RAFFLE_ADDRESS: ${{ vars.RAFFLE_ADDRESS }}
+          BOT_PRIVATE_KEY: ${{ secrets.BOT_PRIVATE_KEY }}

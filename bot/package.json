@@ -1,0 +1,11 @@
+{
+  "name": "doge-raffle-bot",
+  "private": true,
+  "type": "module",
+  "scripts": {
+    "draw": "node draw-bot.mjs"
+  },
+  "dependencies": {
+    "viem": "^2.21.0"
+  }
+}
