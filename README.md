@@ -2,6 +2,10 @@
 
 A recurring native-DOGE raffle dApp for **DogeOS** (the EVM ZK-rollup app layer for Dogecoin). Users connect a wallet and buy tickets with DOGE; every 30 days a winner is drawn, weighted by tickets held. **Winners claim their own prize before a fixed deadline; unclaimed prizes roll into the next jackpot.**
 
+> **Live on Chikyū testnet:**
+> - DogeRaffle: [`0xF5af01A12868F4441250B18950496f68bf029168`](https://dogeos-testnet.l2scan.co/address/0xF5af01A12868F4441250B18950496f68bf029168)
+> - DogeVRFCoordinator: [`0x71991DE95f5fb5ff20b3978ae8C2819010530F5c`](https://dogeos-testnet.l2scan.co/address/0x71991DE95f5fb5ff20b3978ae8C2819010530F5c)
+
 > **Status: DogeOS Chikyū testnet only.** DogeOS mainnet has not launched; when it does, deployment is a config change (new RPC/chain id). **Real-value launch is additionally blocked on the randomness trust model below.**
 
 ## Layout
