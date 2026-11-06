@@ -6,34 +6,56 @@ import {Pausable} from "@openzeppelin/contracts/utils/Pausable.sol";
 import {ReentrancyGuard} from "@openzeppelin/contracts/utils/ReentrancyGuard.sol";
 
 /// @title DogeRaffle — recurring native-DOGE raffle for DogeOS
+///       (claimable prizes + rolling jackpot model)
 ///
 /// Users buy tickets with native DOGE. Every `drawInterval` (default 30 days)
-/// a winner is drawn, weighted by tickets held. The winner receives the round
-/// pot minus a protocol fee (default 5%, hard-capped at 10%) which goes to the
-/// treasury. A fixed bounty, paid out of the fee, rewards whoever calls the
-/// draw functions, so the draw is permissionless and needs no privileged keeper.
+/// a winner is drawn, weighted by tickets held. The prize is NOT pushed: it is
+/// escrowed and only the winner can claim it (paying their own gas), strictly
+/// before an immutable claim cutoff — the scheduled end of the next round,
+/// fixed the moment that round opens. An unclaimed prize is extinguished at
+/// the next round's close and rolled into that round's jackpot exactly once.
+///
+/// Fees: every ticketed draw charges `feeBps` (snapshotted when the round
+/// opens, default 5%, hard-capped at 10%) on the FULL gross pot — new ticket
+/// revenue plus any rolled-over prize money (rollover funds are deliberately
+/// charged again). A fixed bounty, paid out of the fee, rewards whoever calls
+/// the draw, so the draw is permissionless and needs no privileged keeper.
+/// Rounds with no tickets charge no fee and carry any rolled jackpot forward.
 ///
 /// Randomness: DogeOS has no VRF oracle today, and PREVRANDAO returns 0 on
 /// DogeOS, so randomness is derived from the hash of a block chosen AFTER
 /// ticket sales close (two-step commit/finalize). This prevents buyers from
 /// predicting the outcome. Residual trust assumption: the chain's sequencer
-/// could in principle influence block hashes. Acceptable for launch; the draw
-/// logic is isolated in {_random} so a VRF can replace it in a future version.
+/// could in principle influence block hashes, and a permissionless finalize
+/// can be timed. NOT fit for real-value launch as-is; the derivation is
+/// isolated so a VRF can replace it.
 ///
 /// Fail-closed guarantees:
-///  - pause() stops ticket SALES only; draws and claims can never be paused.
-///  - Any payout whose transfer fails is credited to a pull-based balance
-///    ({withdrawable}, claimed via {withdrawPayout}) — a reverting recipient
-///    can never block a draw or trap funds.
+///  - pause() stops ticket SALES only; draws, claims and withdrawals can
+///    never be paused.
+///  - A winner's claim that fails to transfer REVERTS (the claim is never
+///    burned). Failed treasury/bounty pushes are credited to a pull-based
+///    balance ({withdrawable}, claimed via {withdrawPayout}).
+///  - Late claims fail deterministically by timestamp even if no transaction
+///    has settled the expiry yet; a claim before the cutoff and a rollover at
+///    or after it can never both consume the same funds.
 ///  - The owner can change prices/fee/interval for FUTURE rounds, but can
-///    never touch an active round's pot or a credited payout.
+///    never touch an active pot, an awarded claim, or anyone's withdrawable
+///    balance, and can never shorten an existing claim window.
 contract DogeRaffle is Ownable2Step, Pausable, ReentrancyGuard {
     // ---------------------------------------------------------------- types
 
     enum RoundStatus {
         Open, // selling tickets
         Committed, // sales closed, waiting for the randomness block
-        Finalized // winner drawn and paid; round is history
+        Finalized // winner drawn (or empty round rolled); round is history
+    }
+
+    enum PrizeStatus {
+        None,
+        Claimable, // escrowed, waiting for the winner (may be past cutoff but unsettled)
+        Claimed, // winner withdrew it
+        RolledOver // expired unclaimed; moved into a later jackpot
     }
 
     struct Bundle {
@@ -55,10 +77,16 @@ contract DogeRaffle is Ownable2Step, Pausable, ReentrancyGuard {
         uint64 endTime;
         uint64 randomnessBlock; // block whose hash seeds the draw (set on commit)
         RoundStatus status;
+        uint16 feeBps; // fee snapshotted at round open — immutable for this pot
         uint96 totalTickets;
-        uint256 pot;
+        uint256 pot; // NEW ticket revenue only (rollover tracked in pendingCarry)
         address winner;
-        uint256 prize; // winner's net payout (recorded for history/UI)
+    }
+
+    struct Prize {
+        uint256 amount; // claimable DOGE (gross pot minus fee)
+        uint64 claimCutoff; // strict deadline: claim valid only while now < cutoff
+        PrizeStatus status;
     }
 
     // ---------------------------------------------------------------- state
@@ -68,20 +96,26 @@ contract DogeRaffle is Ownable2Step, Pausable, ReentrancyGuard {
     uint64 public constant MIN_DRAW_INTERVAL = 10 minutes;
     uint64 public constant RANDOMNESS_DELAY = 10; // blocks between commit and draw
 
-    uint256 public feeBps = 500; // 5%
+    uint256 public feeBps = 500; // 5% — applied to rounds opened after a change
     uint64 public drawInterval = 30 days;
     uint256 public callerBounty = 1 ether; // 1 DOGE, paid from the fee
     address public treasury;
 
     uint256 public currentRoundId;
     mapping(uint256 => Round) public rounds;
+    mapping(uint256 => Prize) public prizes;
     mapping(uint256 => Entry[]) private _entries;
     mapping(uint256 => mapping(address => uint256)) public ticketsOf;
 
     Bundle[] public bundles;
 
-    /// Payouts (prize, fee, or bounty) whose push transfer failed, plus any
-    /// payout routed pull-only. Claim with {withdrawPayout}.
+    /// Expired, unclaimed jackpot value awaiting the next TICKETED draw.
+    /// Survives any number of empty rounds without fee or loss.
+    uint256 public pendingCarry;
+
+    /// Treasury/bounty payouts whose push transfer failed. Claim with
+    /// {withdrawPayout}. Winner prizes never land here — they live in
+    /// {prizes} with a deadline and are claimed via {claimPrize}.
     mapping(address => uint256) public withdrawable;
 
     // --------------------------------------------------------------- events
@@ -92,10 +126,18 @@ contract DogeRaffle is Ownable2Step, Pausable, ReentrancyGuard {
     event DrawCommitted(uint256 indexed roundId, uint64 randomnessBlock);
     event DrawRecommitted(uint256 indexed roundId, uint64 randomnessBlock);
     event WinnerDrawn(
-        uint256 indexed roundId, address indexed winner, uint256 prize, uint256 fee, uint256 totalTickets
+        uint256 indexed roundId,
+        address indexed winner,
+        uint256 prize,
+        uint256 fee,
+        uint256 grossPot,
+        uint256 totalTickets
     );
-    event EmptyRoundRolledOver(uint256 indexed roundId);
-    event RoundStarted(uint256 indexed roundId, uint64 startTime, uint64 endTime);
+    event PrizeClaimable(uint256 indexed roundId, address indexed winner, uint256 amount, uint64 claimCutoff);
+    event PrizeClaimed(uint256 indexed roundId, address indexed winner, uint256 amount);
+    event PrizeRolledOver(uint256 indexed roundId, uint256 amount, uint256 indexed intoRoundId);
+    event EmptyRoundRolledOver(uint256 indexed roundId, uint256 carriedJackpot);
+    event RoundStarted(uint256 indexed roundId, uint64 startTime, uint64 endTime, uint16 feeBps);
     event PayoutCredited(address indexed to, uint256 amount);
     event PayoutWithdrawn(address indexed to, uint256 amount);
     event BundlesSet(Bundle[] bundles);
@@ -119,6 +161,10 @@ contract DogeRaffle is Ownable2Step, Pausable, ReentrancyGuard {
     error ZeroAddress();
     error NothingToWithdraw();
     error DirectTransfersNotAccepted();
+    error NotWinner();
+    error PrizeNotClaimable();
+    error ClaimExpired();
+    error ClaimTransferFailed();
 
     // ---------------------------------------------------------- constructor
 
@@ -136,7 +182,9 @@ contract DogeRaffle is Ownable2Step, Pausable, ReentrancyGuard {
     }
 
     /// Plain DOGE transfers are rejected so the pot always equals ticket
-    /// revenue and accounting stays exact.
+    /// revenue and accounting stays exact. (Forced transfers — e.g. via a
+    /// pre-funded address — can still raise the raw balance; all accounting
+    /// uses internal tallies, never address(this).balance.)
     receive() external payable {
         revert DirectTransfersNotAccepted();
     }
@@ -163,18 +211,25 @@ contract DogeRaffle is Ownable2Step, Pausable, ReentrancyGuard {
 
     // ----------------------------------------------------------- draw flow
 
-    /// Step 1: close sales once the round has run its interval and pin a
+    /// Step 1: close sales once the round has run its interval, settle the
+    /// PRIOR round's expired prize into the jackpot (exactly once), and pin a
     /// future block as the randomness source. Permissionless.
-    /// An empty round (no tickets) is rolled straight into a new round.
+    /// An empty round (no tickets) is rolled straight into a new round with
+    /// no fee, no bounty, and the carried jackpot preserved.
     function commitDraw() external nonReentrant {
         uint256 roundId = currentRoundId;
         Round storage round = rounds[roundId];
         if (round.status != RoundStatus.Open) revert RoundNotOpen();
         if (block.timestamp < round.endTime) revert RoundStillRunning();
 
+        // Settle the previous round's prize now that this round's deadline
+        // (== that prize's claim cutoff) has passed. Rolls at most once:
+        // status moves Claimable -> RolledOver.
+        _settleExpiredPrize(roundId);
+
         if (round.totalTickets == 0) {
             round.status = RoundStatus.Finalized;
-            emit EmptyRoundRolledOver(roundId);
+            emit EmptyRoundRolledOver(roundId, pendingCarry);
             _startRound();
             return;
         }
@@ -185,10 +240,10 @@ contract DogeRaffle is Ownable2Step, Pausable, ReentrancyGuard {
     }
 
     /// Step 2: draw the winner using the pinned block's hash. Permissionless;
-    /// the caller earns `callerBounty` (paid from the fee). If the pinned
-    /// block has aged out of the 256-block hash window (EIP-2935 history
-    /// window on DogeOS), the commitment is re-pinned instead of reverting,
-    /// so the draw can never strand.
+    /// the caller earns `callerBounty` (paid from the fee). The prize is
+    /// ESCROWED as a claim, never pushed. If the pinned block has aged out of
+    /// the 256-block hash window, the commitment is re-pinned instead of
+    /// reverting, so the draw can never strand.
     function finalizeDraw() external nonReentrant {
         uint256 roundId = currentRoundId;
         Round storage round = rounds[roundId];
@@ -208,27 +263,69 @@ contract DogeRaffle is Ownable2Step, Pausable, ReentrancyGuard {
             uint256(keccak256(abi.encodePacked(seed, roundId, totalTickets, address(this)))) % totalTickets;
         address winner = _ownerOfTicket(roundId, winningTicket);
 
-        uint256 pot = round.pot;
-        uint256 fee = (pot * feeBps) / BPS;
+        // Gross pot = new ticket revenue + all eligible rollover. The fee is
+        // deliberately charged on the FULL gross, including rolled funds.
+        uint256 gross = round.pot + pendingCarry;
+        pendingCarry = 0;
+        uint256 fee = (gross * round.feeBps) / BPS;
         uint256 bounty = callerBounty < fee ? callerBounty : fee;
-        uint256 prize = pot - fee;
+        uint256 prizeAmount = gross - fee;
 
         round.status = RoundStatus.Finalized;
         round.winner = winner;
-        round.prize = prize;
+        prizes[roundId] = Prize({amount: prizeAmount, claimCutoff: 0, status: PrizeStatus.Claimable});
 
-        emit WinnerDrawn(roundId, winner, prize, fee, totalTickets);
+        emit WinnerDrawn(roundId, winner, prizeAmount, fee, gross, totalTickets);
+
+        // Open the next round, then fix this prize's cutoff to its scheduled
+        // end — immutable from here on, whatever happens to drawInterval.
         _startRound();
+        uint64 cutoff = rounds[currentRoundId].endTime;
+        prizes[roundId].claimCutoff = cutoff;
+        emit PrizeClaimable(roundId, winner, prizeAmount, cutoff);
 
-        // interactions last (state above is final)
-        _pay(winner, prize);
+        // interactions last (all state above is final)
         _pay(treasury, fee - bounty);
         _pay(msg.sender, bounty);
     }
 
+    // ------------------------------------------------------------- claims
+
+    /// Winner-only, one-time, strictly before the cutoff. The winner pays
+    /// gas. A failed transfer REVERTS — the claim is never burned. Works
+    /// while paused.
+    function claimPrize(uint256 roundId) external nonReentrant {
+        Prize storage prize = prizes[roundId];
+        if (msg.sender != rounds[roundId].winner) revert NotWinner();
+        if (prize.status != PrizeStatus.Claimable) revert PrizeNotClaimable();
+        if (block.timestamp >= prize.claimCutoff) revert ClaimExpired();
+
+        prize.status = PrizeStatus.Claimed;
+        uint256 amount = prize.amount;
+        (bool ok,) = msg.sender.call{value: amount}("");
+        if (!ok) revert ClaimTransferFailed();
+        emit PrizeClaimed(roundId, msg.sender, amount);
+    }
+
+    /// Move the prior round's prize into the jackpot if its cutoff has
+    /// passed unclaimed. At most one prize can be outstanding (each round's
+    /// prize is settled at the NEXT round's commit), so checking roundId-1
+    /// is exhaustive.
+    function _settleExpiredPrize(uint256 committingRoundId) private {
+        if (committingRoundId < 2) return;
+        uint256 prevId = committingRoundId - 1;
+        Prize storage prize = prizes[prevId];
+        if (prize.status == PrizeStatus.Claimable && block.timestamp >= prize.claimCutoff) {
+            prize.status = PrizeStatus.RolledOver;
+            pendingCarry += prize.amount;
+            emit PrizeRolledOver(prevId, prize.amount, committingRoundId);
+        }
+    }
+
     // ------------------------------------------------------------- payouts
 
-    /// Push a payout; on any failure credit it for pull-based withdrawal.
+    /// Push a treasury/bounty payout; on any failure credit it for pull-based
+    /// withdrawal. Never used for winner prizes.
     function _pay(address to, uint256 amount) private {
         if (amount == 0) return;
         (bool ok,) = to.call{value: amount, gas: 50_000}("");
@@ -238,7 +335,7 @@ contract DogeRaffle is Ownable2Step, Pausable, ReentrancyGuard {
         }
     }
 
-    /// Claim payouts whose push transfer failed. Never pausable.
+    /// Claim treasury/bounty payouts whose push transfer failed. Never pausable.
     function withdrawPayout() external nonReentrant {
         uint256 amount = withdrawable[msg.sender];
         if (amount == 0) revert NothingToWithdraw();
@@ -256,7 +353,8 @@ contract DogeRaffle is Ownable2Step, Pausable, ReentrancyGuard {
         round.startTime = uint64(block.timestamp);
         round.endTime = uint64(block.timestamp) + drawInterval;
         round.status = RoundStatus.Open;
-        emit RoundStarted(roundId, round.startTime, round.endTime);
+        round.feeBps = uint16(feeBps); // snapshot: owner can't re-fee an active pot
+        emit RoundStarted(roundId, round.startTime, round.endTime, round.feeBps);
     }
 
     /// Binary search over cumulative ticket ranges: first entry whose
@@ -289,13 +387,15 @@ contract DogeRaffle is Ownable2Step, Pausable, ReentrancyGuard {
         emit BundlesSet(newBundles);
     }
 
+    /// Applies to rounds OPENED after the change (each round snapshots its fee).
     function setFeeBps(uint256 newFeeBps) external onlyOwner {
         if (newFeeBps > MAX_FEE_BPS) revert FeeTooHigh();
         feeBps = newFeeBps;
         emit FeeBpsSet(newFeeBps);
     }
 
-    /// Applies to rounds started AFTER the current one ends.
+    /// Applies to rounds STARTED after the current one ends. Never alters an
+    /// existing prize's claim cutoff (cutoffs are stored at award time).
     function setDrawInterval(uint64 newInterval) external onlyOwner {
         if (newInterval < MIN_DRAW_INTERVAL) revert IntervalTooShort();
         drawInterval = newInterval;
@@ -313,7 +413,7 @@ contract DogeRaffle is Ownable2Step, Pausable, ReentrancyGuard {
         emit TreasurySet(newTreasury);
     }
 
-    /// Pauses ticket SALES only. Draws, finalization and withdrawals are
+    /// Pauses ticket SALES only. Draws, claims and withdrawals are
     /// deliberately not pausable, so user funds can never be trapped.
     function pause() external onlyOwner {
         _pause();
@@ -345,6 +445,26 @@ contract DogeRaffle is Ownable2Step, Pausable, ReentrancyGuard {
     function canFinalize() external view returns (bool) {
         Round storage round = rounds[currentRoundId];
         return round.status == RoundStatus.Committed && block.number > round.randomnessBlock;
+    }
+
+    function prizeOf(uint256 roundId) external view returns (Prize memory) {
+        return prizes[roundId];
+    }
+
+    /// DOGE the current draw is guaranteed to include: new ticket revenue
+    /// plus rollover already settled on-chain.
+    function guaranteedPot() public view returns (uint256) {
+        return rounds[currentRoundId].pot + pendingCarry;
+    }
+
+    /// The prior round's prize if it could still roll into this draw:
+    /// (amount, cutoff, stillClaimable). UI must present this as POSSIBLE
+    /// rollover until the cutoff passes — the winner may still claim it.
+    function pendingRollover() external view returns (uint256 amount, uint64 cutoff, bool stillClaimable) {
+        if (currentRoundId < 2) return (0, 0, false);
+        Prize storage prize = prizes[currentRoundId - 1];
+        if (prize.status != PrizeStatus.Claimable) return (0, 0, false);
+        return (prize.amount, prize.claimCutoff, block.timestamp < prize.claimCutoff);
     }
 
     function currentRound()
