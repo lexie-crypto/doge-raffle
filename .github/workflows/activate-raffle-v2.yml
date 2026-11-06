@@ -27,8 +27,8 @@ jobs:
         working-directory: contracts
         env:
           DEPLOYER_PRIVATE_KEY: ${{ secrets.DEPLOYER_PRIVATE_KEY }}
-          OLD_RAFFLE_ADDRESS: 0x0B0024090b1a2BD99128654E0047BB27fE30D05C
-          NEW_RAFFLE_ADDRESS: 0x5665F2A606E548306e38d98a05335845F05Ec70b
+          OLD_RAFFLE_ADDRESS: "0x0B0024090b1a2BD99128654E0047BB27fE30D05C"
+          NEW_RAFFLE_ADDRESS: "0x5665F2A606E548306e38d98a05335845F05Ec70b"
           TREASURY_ADDRESS: ${{ vars.TREASURY_ADDRESS }}
           FOUNDATION_ADDRESS: ${{ vars.FOUNDATION_ADDRESS }}
         run: forge script script/ActivateRaffleV2.s.sol:ActivateRaffleV2 --rpc-url dogeos_testnet --broadcast --slow
