@@ -11,6 +11,7 @@ import {DogeVRFCoordinator} from "../src/vrf/DogeVRFCoordinator.sol";
 ///   export RAFFLE_OWNER=0x...           # admin address (defaults to deployer)
 ///   export RAFFLE_TREASURY=0x...        # receives the 5% protocol fee (defaults to deployer)
 ///   export RAFFLE_FOUNDATION=0x...      # Dogecoin Foundation wallet, receives 5% (defaults to deployer — SET THIS)
+///   export WALLET_ADMIN=0x...           # optional: bot wallet allowed to update the two payout addresses from repo vars
 ///   # VRF (recommended). Generate the keypair with:
 ///   #   node ../bot/ecvrf-cli.mjs pubkey <VRF_SECRET_KEY>
 ///   export VRF_PUBKEY_X=0x...
@@ -26,6 +27,7 @@ contract Deploy is Script {
         address owner = vm.envOr("RAFFLE_OWNER", deployer);
         address treasury = vm.envOr("RAFFLE_TREASURY", deployer);
         address foundation = vm.envOr("RAFFLE_FOUNDATION", deployer);
+        address walletAdmin = vm.envOr("WALLET_ADMIN", address(0));
         uint256 vrfPkX = vm.envOr("VRF_PUBKEY_X", uint256(0));
         uint256 vrfPkY = vm.envOr("VRF_PUBKEY_Y", uint256(0));
 
@@ -35,6 +37,10 @@ contract Deploy is Script {
         console.log("DogeRaffle deployed:", address(raffle));
         if (foundation == deployer) {
             console.log("WARNING: RAFFLE_FOUNDATION not set - foundation fee goes to deployer until setFoundationWallet()");
+        }
+        if (walletAdmin != address(0)) {
+            raffle.setWalletAdmin(walletAdmin);
+            console.log("walletAdmin:", walletAdmin);
         }
 
         if (vrfPkX != 0 && vrfPkY != 0) {

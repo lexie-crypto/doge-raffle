@@ -1,10 +1,10 @@
 "use client";
 
-import { ConnectButton, useConnectModal } from "@rainbow-me/rainbowkit";
 import { useEffect, useMemo, useState } from "react";
 import { formatEther } from "viem";
 import {
   useAccount,
+  useConnect,
   useReadContract,
   useReadContracts,
   useWaitForTransactionReceipt,
@@ -12,6 +12,7 @@ import {
 } from "wagmi";
 import { PrizeStatus, raffleAbi } from "@/lib/abi";
 import { RAFFLE_ADDRESS, dogeosChikyu } from "@/lib/chain";
+import { ConnectWallet } from "./connect";
 import { DogeCoin, DogeOSBadge } from "./doge";
 import { MyTickets } from "./my-tickets";
 
@@ -67,9 +68,15 @@ function useNowSec() {
 }
 
 export default function Home() {
-  const { address, isConnected } = useAccount();
-  const { openConnectModal } = useConnectModal();
+  const { address: liveAddress, isConnected: liveConnected } = useAccount();
+  const { connect, connectors } = useConnect();
   const nowSec = useNowSec();
+  // Wallet state must not influence the first client render (it has to match
+  // the server HTML); a wallet that auto-reconnects can otherwise flip
+  // isConnected before hydration finishes.
+  const mounted = nowSec !== null;
+  const isConnected = mounted && liveConnected;
+  const address = mounted ? liveAddress : undefined;
   const { writeContract, data: txHash, isPending, error: txError } =
     useWriteContract();
   const { isLoading: txConfirming, isSuccess: txConfirmed } =
@@ -103,6 +110,15 @@ export default function Home() {
     ...raffle,
     functionName: "allBundles",
   });
+
+  const { data: payoutWallets } = useReadContracts({
+    contracts: [
+      { ...raffle, functionName: "treasury" as const },
+      { ...raffle, functionName: "foundationWallet" as const },
+    ],
+  });
+  const treasuryAddr = payoutWallets?.[0]?.result as string | undefined;
+  const foundationAddr = payoutWallets?.[1]?.result as string | undefined;
 
   const { data: myTickets, refetch: refetchMyTickets } = useReadContract({
     ...raffle,
@@ -249,7 +265,7 @@ export default function Home() {
           </div>
         </div>
         <div className="flex shrink-0 flex-row items-center gap-2 sm:flex-col sm:items-end">
-          <ConnectButton chainStatus="icon" showBalance={false} />
+          <ConnectWallet />
           <DogeOSBadge />
         </div>
       </header>
@@ -374,7 +390,10 @@ export default function Home() {
                 disabled={!deployed || isPending || txConfirming}
                 onClick={() => {
                   if (!isConnected) {
-                    openConnectModal?.();
+                    // one-click path for the common single-wallet case;
+                    // the header button handles pickers and fallbacks
+                    const c = connectors.find((x) => x.id !== "injected") ?? connectors[0];
+                    if (c) connect({ connector: c });
                     return;
                   }
                   writeContract({
@@ -530,6 +549,28 @@ export default function Home() {
             Powered by DogeOS — the Dogecoin app layer
           </span>
         </div>
+        {treasuryAddr && foundationAddr && (
+          <p className="mb-3">
+            Fee recipients (on-chain, verifiable): protocol treasury{" "}
+            <a
+              className="font-mono text-amber-600 underline"
+              href={`${dogeosChikyu.blockExplorers.default.url}/address/${treasuryAddr}`}
+              target="_blank"
+              rel="noreferrer"
+            >
+              {treasuryAddr.slice(0, 6)}…{treasuryAddr.slice(-4)}
+            </a>{" "}
+            · Dogecoin Foundation{" "}
+            <a
+              className="font-mono text-amber-600 underline"
+              href={`${dogeosChikyu.blockExplorers.default.url}/address/${foundationAddr}`}
+              target="_blank"
+              rel="noreferrer"
+            >
+              {foundationAddr.slice(0, 6)}…{foundationAddr.slice(-4)}
+            </a>
+          </p>
+        )}
         Winners claim their own prize (and pay gas) before a fixed deadline —
         unclaimed prizes roll into the next jackpot, where the protocol and
         Dogecoin Foundation fees apply to the full gross pot including rolled

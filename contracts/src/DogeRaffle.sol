@@ -108,6 +108,11 @@ contract DogeRaffle is Ownable2Step, Pausable, ReentrancyGuard, IVRFConsumer {
     uint256 public feeBps = 500; // protocol 5% — applied to rounds opened after a change
     uint256 public foundationBps = 500; // Dogecoin Foundation 5% — likewise
     address public foundationWallet;
+    /// Narrow operational role: may ONLY change the treasury and foundation
+    /// payout addresses (so a CI job can apply repo-configured addresses
+    /// without holding the owner key). Cannot touch fees, pots, claims,
+    /// pausing, or the VRF wiring.
+    address public walletAdmin;
     uint256 public callerBounty = 1 ether; // 1 DOGE, paid from the fee
     address public treasury;
 
@@ -174,6 +179,7 @@ contract DogeRaffle is Ownable2Step, Pausable, ReentrancyGuard, IVRFConsumer {
     event FeeBpsSet(uint256 feeBps);
     event FoundationBpsSet(uint256 foundationBps);
     event FoundationWalletSet(address foundationWallet);
+    event WalletAdminSet(address walletAdmin);
     event CallerBountySet(uint256 bounty);
     event TreasurySet(address treasury);
     event VrfRequested(uint256 indexed roundId, uint256 indexed requestId);
@@ -199,6 +205,7 @@ contract DogeRaffle is Ownable2Step, Pausable, ReentrancyGuard, IVRFConsumer {
     error ClaimExpired();
     error ClaimTransferFailed();
     error OnlyCoordinator();
+    error NotWalletAdmin();
     error StaleVrfResponse();
     error VrfStillPending();
     error TimeoutTooShort();
@@ -482,10 +489,21 @@ contract DogeRaffle is Ownable2Step, Pausable, ReentrancyGuard, IVRFConsumer {
         emit FoundationBpsSet(newFoundationBps);
     }
 
-    function setFoundationWallet(address newWallet) external onlyOwner {
+    function setFoundationWallet(address newWallet) external onlyOwnerOrWalletAdmin {
         if (newWallet == address(0)) revert ZeroAddress();
         foundationWallet = newWallet;
         emit FoundationWalletSet(newWallet);
+    }
+
+    /// Grant (or clear, with address(0)) the wallet-admin role. Owner only.
+    function setWalletAdmin(address newAdmin) external onlyOwner {
+        walletAdmin = newAdmin;
+        emit WalletAdminSet(newAdmin);
+    }
+
+    modifier onlyOwnerOrWalletAdmin() {
+        if (msg.sender != owner() && msg.sender != walletAdmin) revert NotWalletAdmin();
+        _;
     }
 
     /// Set (or clear, with address(0)) the VRF coordinator. Takes effect at
@@ -508,7 +526,7 @@ contract DogeRaffle is Ownable2Step, Pausable, ReentrancyGuard, IVRFConsumer {
         emit CallerBountySet(newBounty);
     }
 
-    function setTreasury(address newTreasury) external onlyOwner {
+    function setTreasury(address newTreasury) external onlyOwnerOrWalletAdmin {
         if (newTreasury == address(0)) revert ZeroAddress();
         treasury = newTreasury;
         emit TreasurySet(newTreasury);

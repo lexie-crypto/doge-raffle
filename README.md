@@ -3,8 +3,8 @@
 A recurring native-DOGE raffle dApp for **DogeOS** (the EVM ZK-rollup app layer for Dogecoin). Users connect a wallet and buy tickets with DOGE; on the 1st of every month (00:00 UTC) a winner is drawn, weighted by tickets held. **Winners claim their own prize before a fixed deadline; unclaimed prizes roll into the next jackpot.**
 
 > **Live on Chikyū testnet:**
-> - DogeRaffle: [`0x6d1d86d95Ae63ec170cd73D33e3BE710a4FBE0aa`](https://dogeos-testnet.l2scan.co/address/0x6d1d86d95Ae63ec170cd73D33e3BE710a4FBE0aa)
-> - DogeVRFCoordinator: [`0xc8F4eB8E4ABbC34B6E097582D14806767457B9c9`](https://dogeos-testnet.l2scan.co/address/0xc8F4eB8E4ABbC34B6E097582D14806767457B9c9)
+> - DogeRaffle: [`0x0B0024090b1a2BD99128654E0047BB27fE30D05C`](https://dogeos-testnet.l2scan.co/address/0x0B0024090b1a2BD99128654E0047BB27fE30D05C)
+> - DogeVRFCoordinator: [`0x4463AF4EAccFFB4AC14e87e9dac09B59e9E3614c`](https://dogeos-testnet.l2scan.co/address/0x4463AF4EAccFFB4AC14e87e9dac09B59e9E3614c)
 
 > **Status: DogeOS Chikyū testnet only.** DogeOS mainnet has not launched; when it does, deployment is a config change (new RPC/chain id). **Real-value launch is additionally blocked on the randomness trust model below.**
 
@@ -13,7 +13,7 @@ A recurring native-DOGE raffle dApp for **DogeOS** (the EVM ZK-rollup app layer 
 | Path | What |
 |---|---|
 | `contracts/` | Foundry project: `DogeRaffle.sol`, tests, deploy script |
-| `web/` | Next.js frontend (wagmi + viem + RainbowKit — any EVM wallet: browser-injected, WalletConnect, Coinbase Wallet). Wallet = account: a "My tickets" dashboard shows ticket numbers, past rounds, each draw's winning ticket and your result, read directly from the contract via Multicall3. |
+| `web/` | Next.js frontend (wagmi + viem, browser wallets only: every extension and every mobile wallet's in-app browser via EIP-1193/EIP-6963 — no WalletConnect, no project id). Wallet = account: a "My tickets" dashboard shows ticket numbers, past rounds, each draw's winning ticket and your result, read directly from the contract via Multicall3. |
 | `bot/` | Draw-keeper cron bot + GitHub Actions workflow |
 
 ## How it works
@@ -62,7 +62,7 @@ forge test          # 37 tests: claims, rollover, boundary races, exact fee
 # frontend
 cd web
 npm install
-cp .env.example .env.local   # set NEXT_PUBLIC_RAFFLE_ADDRESS + WalletConnect project id
+cp .env.example .env.local   # set NEXT_PUBLIC_RAFFLE_ADDRESS
 npm run dev
 ```
 
@@ -82,7 +82,18 @@ forge script script/Deploy.s.sol --rpc-url dogeos_testnet --broadcast
 
 Chain: id `6281971`, RPC `https://rpc.testnet.dogeos.com/`, explorer [dogeos-testnet.l2scan.co](https://dogeos-testnet.l2scan.co). Contracts compile with Solidity 0.8.31 / `osaka` EVM target per the [DogeOS docs](https://docs.dogeos.com/en/developers/ethereum-and-dogeos-differences).
 
-Then set repo Actions config for the backstop bot: variable `RAFFLE_ADDRESS`, secret `BOT_PRIVATE_KEY` (a throwaway hot wallet with a little testnet DOGE for gas), and update `NEXT_PUBLIC_RAFFLE_ADDRESS` for the web app.
+Then set the repo's Actions config (Settings → Secrets and variables → Actions):
+
+| Kind | Name | What |
+|---|---|---|
+| Variable | `RAFFLE_ADDRESS` | deployed DogeRaffle |
+| Variable | `COORDINATOR_ADDRESS` | deployed DogeVRFCoordinator |
+| Variable | `TREASURY_ADDRESS` | protocol fee recipient — change anytime |
+| Variable | `FOUNDATION_ADDRESS` | Dogecoin Foundation fee recipient — change anytime |
+| Secret | `BOT_PRIVATE_KEY` | hot wallet: pays draw gas, fulfills VRF, and holds the on-chain `walletAdmin` role |
+| Secret | `VRF_SECRET_KEY` | ECVRF oracle key (keep an offline copy; rotate with `setOracleKey`) |
+
+**Payout addresses are configurable anytime.** The contract stores `treasury` and `foundationWallet`; the `sync-wallets` workflow (run it manually after editing the two variables — it also runs before every draw) reads `TREASURY_ADDRESS` / `FOUNDATION_ADDRESS`, compares with the chain, and applies any change. It signs with the bot key, which holds the `walletAdmin` role: a deliberately narrow permission that can change **only** these two addresses — not fees, pots, claims, pausing or VRF wiring. The owner can also change them directly from the explorer and can revoke the role with `setWalletAdmin(0x0)`.
 
 ## Credits
 

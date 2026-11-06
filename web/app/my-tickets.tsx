@@ -40,7 +40,11 @@ export function MyTickets({
   onClaim: (roundId: bigint) => void;
   busy: boolean;
 }) {
-  const { address, isConnected } = useAccount();
+  const { address: liveAddress, isConnected: liveConnected } = useAccount();
+  // same hydration guard as the page: no wallet-dependent output until mounted
+  const mounted = nowSec !== null;
+  const isConnected = mounted && liveConnected;
+  const address = mounted ? liveAddress : undefined;
 
   const { data: currentRoundId } = useReadContract({
     ...raffle,

@@ -534,6 +534,56 @@ contract DogeRaffleTest is Test {
         assertEq(raffle.nextDrawTime(0), 2_678_400, "epoch -> Feb 1 1970");
     }
 
+    function test_walletAdminRole_isNarrow() public {
+        address ops = makeAddr("ops");
+        address t2 = makeAddr("treasury2");
+        address f2 = makeAddr("foundation2");
+
+        // not granted yet: cannot set
+        vm.prank(ops);
+        vm.expectRevert(DogeRaffle.NotWalletAdmin.selector);
+        raffle.setTreasury(t2);
+
+        // only owner can grant
+        vm.prank(ops);
+        vm.expectRevert();
+        raffle.setWalletAdmin(ops);
+        vm.prank(owner);
+        raffle.setWalletAdmin(ops);
+
+        // admin can change the two payout addresses...
+        vm.startPrank(ops);
+        raffle.setTreasury(t2);
+        raffle.setFoundationWallet(f2);
+        // ...and nothing else
+        vm.expectRevert();
+        raffle.setFeeBps(100);
+        vm.expectRevert();
+        raffle.setFoundationBps(100);
+        vm.expectRevert();
+        raffle.pause();
+        vm.expectRevert();
+        raffle.setVrfCoordinator(address(0));
+        vm.expectRevert();
+        raffle.setWalletAdmin(alice);
+        vm.stopPrank();
+
+        // payouts follow the new addresses
+        _buySingles(alice, 50);
+        _draw();
+        assertEq(t2.balance, 49 ether);
+        assertEq(f2.balance, 50 ether);
+
+        // owner can revoke; owner itself still works
+        vm.prank(owner);
+        raffle.setWalletAdmin(address(0));
+        vm.prank(ops);
+        vm.expectRevert(DogeRaffle.NotWalletAdmin.selector);
+        raffle.setTreasury(treasury);
+        vm.prank(owner);
+        raffle.setTreasury(treasury);
+    }
+
     function test_feeCapEnforced() public {
         vm.prank(owner);
         vm.expectRevert(DogeRaffle.FeeTooHigh.selector);

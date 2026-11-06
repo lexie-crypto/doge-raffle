@@ -25,6 +25,14 @@ jobs:
           node-version: 22
       - run: npm install --omit=dev
         working-directory: bot
+      # Apply any payout-address changes from repo variables before drawing.
+      - run: node sync-wallets.mjs
+        working-directory: bot
+        env:
+          RAFFLE_ADDRESS: ${{ vars.RAFFLE_ADDRESS }}
+          TREASURY_ADDRESS: ${{ vars.TREASURY_ADDRESS }}
+          FOUNDATION_ADDRESS: ${{ vars.FOUNDATION_ADDRESS }}
+          WALLET_ADMIN_PRIVATE_KEY: ${{ secrets.BOT_PRIVATE_KEY }}
       - run: node draw-bot.mjs
         working-directory: bot
         env:
