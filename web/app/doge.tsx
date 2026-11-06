@@ -3,7 +3,8 @@
 /*
  * Doge artwork. Both images come from the Dogecoin Core repository
  * (github.com/dogecoin/dogecoin, MIT license):
- *  - /dogecoin-logo.svg  share/pixmaps/dogecoin256.svg (official coin logo)
+ *  - /dogecoin-coin.svg  share/pixmaps/dogecoin256.svg (official coin logo) with
+ *                        its white "D" overlay removed — Doge face only
  *  - /doge-wow-seal.png  medallion cropped from src/qt/res/icons/paper_wallet.png
  */
 
@@ -12,7 +13,7 @@
 export function DogeCoin({ size = 48, className }: { size?: number; className?: string }) {
   return (
     <img
-      src="/dogecoin-logo.svg"
+      src="/dogecoin-coin.svg"
       width={size}
       height={size}
       alt="Dogecoin"

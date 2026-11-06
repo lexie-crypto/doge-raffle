@@ -110,7 +110,7 @@ Then set the repo's Actions config (Settings → Secrets and variables → Actio
 
 ## Credits
 
-The Dogecoin logo (`web/public/dogecoin-logo*.png`, `web/app/icon.png`) is taken from the Dogecoin Core repository ([dogecoin/dogecoin](https://github.com/dogecoin/dogecoin), `src/qt/res/icons/dogecoin.png`, MIT license) and used to denote the DOGE currency. Dogecoin is a trademark of its respective owners; this project is not affiliated with or endorsed by the Dogecoin Foundation.
+The Dogecoin coin art (`web/public/dogecoin-coin.svg`, `web/app/icon.png`) is the official logo from the Dogecoin Core repository ([dogecoin/dogecoin](https://github.com/dogecoin/dogecoin), `share/pixmaps/dogecoin256.svg`, MIT license) with its white "D" overlay removed; the "wow" seal (`web/public/doge-wow-seal.png`) is cropped from the same repo's `src/qt/res/icons/paper_wallet.png` and used to denote the DOGE currency. Dogecoin is a trademark of its respective owners; this project is not affiliated with or endorsed by the Dogecoin Foundation.
 
 ## Legal
 
