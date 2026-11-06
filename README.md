@@ -56,6 +56,8 @@ cd bot && npm install
 COORDINATOR_ADDRESS=0x... VRF_SECRET_KEY=0x... ORACLE_PRIVATE_KEY=0x... node vrf-oracle.mjs --watch
 ```
 
+On an Ubuntu server (e.g. a Google Cloud e2-micro), `scripts/build-oracle-installer.sh` produces a single `install-doge-oracle.sh` that embeds the oracle (no git access needed), installs Node 22, prompts for the keys (stored root-only in `/etc/doge-oracle.env`), and runs it as a hardened systemd service that restarts on crash or reboot. Upload it and run `sudo bash install-doge-oracle.sh`; rerun a newer build to update (keys are kept). Logs: `sudo journalctl -u doge-oracle -f`.
+
 Developer-facing docs live on the site at `/docs` (product page at `/vrf`). The code samples there are copied at build time from `contracts/src/examples/DiceRoller.sol` (tested end-to-end with real proofs in `contracts/test/DiceRoller.t.sol`) and `bot/examples/request-randomness.mjs` (run end-to-end on testnet), so they can't drift from tested code.
 
 **Residual trust, stated plainly:** VRF outputs are unforgeable, but the key holder sees an output before posting and could *withhold* it, steering the round to the (also unpredictable) blockhash fallback; the fallback itself carries sequencer-influence and timing caveats. This is a major upgrade over blockhash-only, but **real-value launch still requires a reviewed randomness design** (e.g. key management, fallback policy) **and legal clearance.** Keep the VRF secret key offline-backed and separate from the gas wallet.
