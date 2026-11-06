@@ -9,6 +9,7 @@ import {
   useSwitchChain,
 } from "wagmi";
 import { dogeosChikyu } from "@/lib/chain";
+import { ensureDogeOs } from "./use-safe-write";
 
 /**
  * Connect button for browser wallets (extensions + mobile in-app browsers).
@@ -28,6 +29,23 @@ export function ConnectWallet() {
   const { switchChain, isPending: switching } = useSwitchChain();
   const connectors = useConnectors();
   const [open, setOpen] = useState(false);
+
+  // Connect, then explicitly request DogeOS on the wallet: wallets with
+  // per-site network permissions (MetaMask) only authorize this site on
+  // DogeOS when asked, even if DogeOS is already their active network.
+  const connectTo = (c: (typeof connectors)[number]) =>
+    connect(
+      { connector: c, chainId: dogeosChikyu.id },
+      {
+        onSuccess: async () => {
+          try {
+            await ensureDogeOs((await c.getProvider()) as Parameters<typeof ensureDogeOs>[0]);
+          } catch {
+            /* declined: transactions will ask again */
+          }
+        },
+      },
+    );
   const [mounted, setMounted] = useState(false);
   useEffect(() => setMounted(true), []);
 
@@ -79,7 +97,7 @@ export function ConnectWallet() {
       <button
         onClick={() => {
           if (!hasWallet) return setOpen(true);
-          if (choices.length === 1) return connect({ connector: choices[0] });
+          if (choices.length === 1) return connectTo(choices[0]);
           setOpen(true);
         }}
         disabled={isPending}
@@ -104,7 +122,7 @@ export function ConnectWallet() {
                   <li key={c.uid}>
                     <button
                       onClick={() => {
-                        connect({ connector: c });
+                        connectTo(c);
                         setOpen(false);
                       }}
                       className="doge-btn flex w-full items-center gap-3 rounded-xl border-2 border-amber-100 px-4 py-3 text-left font-semibold text-amber-950 hover:border-amber-400"

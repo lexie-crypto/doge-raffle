@@ -12,7 +12,7 @@ import { PrizeStatus, raffleAbi } from "@/lib/abi";
 import { RAFFLE_ADDRESS, dogeosChikyu } from "@/lib/chain";
 import { CoinRain, CoinStack, DogeCoin, DogeOSBadge, Rays, WowSeal } from "./doge";
 import { MyTickets } from "./my-tickets";
-import { useSafeWrite } from "./use-safe-write";
+import { ensureDogeOs, useSafeWrite } from "./use-safe-write";
 import { SiteFooter, SiteNav } from "./site-chrome";
 import {
   CountdownTiles,
@@ -237,7 +237,19 @@ export default function Home() {
       // one-click path for the common single-wallet case; the header
       // button handles pickers and the no-wallet fallback
       const c = connectors.find((x) => x.id !== "injected") ?? connectors[0];
-      if (c) connect({ connector: c });
+      if (c)
+        connect(
+          { connector: c, chainId: dogeosChikyu.id },
+          {
+            onSuccess: async () => {
+              try {
+                await ensureDogeOs((await c.getProvider()) as Parameters<typeof ensureDogeOs>[0]);
+              } catch {
+                /* declined: the purchase will ask again */
+              }
+            },
+          },
+        );
       return;
     }
     writeContract({
