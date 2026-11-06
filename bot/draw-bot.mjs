@@ -44,7 +44,7 @@ const dogeosChikyu = defineChain({
 
 const abi = parseAbi([
   "function currentRoundId() view returns (uint256)",
-  "function rounds(uint256) view returns (uint64 startTime, uint64 endTime, uint64 randomnessBlock, uint8 status, uint16 feeBps, uint96 totalTickets, uint256 pot, address winner)",
+  "function rounds(uint256) view returns (uint64 startTime, uint64 endTime, uint64 randomnessBlock, uint8 status, uint16 feeBps, uint16 foundationBps, uint96 totalTickets, uint256 pot, address winner)",
   "function canCommit() view returns (bool)",
   "function canFinalize() view returns (bool)",
   "function commitDraw()",
@@ -94,7 +94,7 @@ async function send(functionName, recheck) {
 async function roundState() {
   const id = await read("currentRoundId");
   const r = await read("rounds", [id]);
-  return { id, status: r[3], randomnessBlock: r[2] };
+  return { id, status: r[3], randomnessBlock: r[2] }; // tuple: start,end,randBlock,status,feeBps,foundationBps,tickets,pot,winner
 }
 
 async function main() {

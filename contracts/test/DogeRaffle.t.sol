@@ -60,6 +60,7 @@ contract DogeRaffleTest is Test {
     DogeRaffle internal raffle;
     address internal owner = makeAddr("owner");
     address internal treasury = makeAddr("treasury");
+    address internal foundation = makeAddr("foundation");
     address internal alice = makeAddr("alice");
     address internal bob = makeAddr("bob");
     address internal keeper = makeAddr("keeper");
@@ -69,7 +70,7 @@ contract DogeRaffleTest is Test {
     uint256 internal constant TEN = 2; // 10 tickets / 170 DOGE
 
     function setUp() public {
-        raffle = new DogeRaffle(owner, treasury);
+        raffle = new DogeRaffle(owner, treasury, foundation);
         vm.deal(alice, 10_000_000 ether);
         vm.deal(bob, 10_000_000 ether);
         vm.deal(keeper, 100 ether);
@@ -83,14 +84,24 @@ contract DogeRaffleTest is Test {
         uint64 randomnessBlock;
         DogeRaffle.RoundStatus status;
         uint16 feeBps;
+        uint16 foundationBps;
         uint96 totalTickets;
         uint256 pot;
         address winner;
     }
 
     function _round(uint256 id) internal view returns (R memory r) {
-        (r.startTime, r.endTime, r.randomnessBlock, r.status, r.feeBps, r.totalTickets, r.pot, r.winner) =
-            raffle.rounds(id);
+        (
+            r.startTime,
+            r.endTime,
+            r.randomnessBlock,
+            r.status,
+            r.feeBps,
+            r.foundationBps,
+            r.totalTickets,
+            r.pot,
+            r.winner
+        ) = raffle.rounds(id);
     }
 
     function _endRound() internal {
@@ -178,17 +189,18 @@ contract DogeRaffleTest is Test {
 
         uint256 roundId = _draw();
 
-        // SoW exact arithmetic R1: pot 1,000 -> fee 50, bounty 1, treasury 49, claim 950
+        // R1: pot 1,000 -> protocol 50 (bounty 1 -> treasury 49), foundation 50, claim 900
         DogeRaffle.Prize memory prize = raffle.prizeOf(roundId);
         assertEq(uint8(prize.status), uint8(DogeRaffle.PrizeStatus.Claimable));
-        assertEq(prize.amount, 950 ether);
+        assertEq(prize.amount, 900 ether);
         assertEq(treasury.balance, 49 ether);
+        assertEq(foundation.balance, 50 ether);
         assertEq(keeper.balance, 100 ether + 1 ether);
 
         // nothing pushed to the winner
         assertEq(alice.balance, aliceBefore);
         // escrow held in contract
-        assertEq(address(raffle).balance, 950 ether);
+        assertEq(address(raffle).balance, 900 ether);
 
         // cutoff = next round's scheduled end
         assertEq(prize.claimCutoff, _round(roundId + 1).endTime);
@@ -207,7 +219,7 @@ contract DogeRaffleTest is Test {
         uint256 before = alice.balance;
         vm.prank(alice);
         raffle.claimPrize(roundId);
-        assertEq(alice.balance, before + 950 ether);
+        assertEq(alice.balance, before + 900 ether);
         assertEq(uint8(raffle.prizeOf(roundId).status), uint8(DogeRaffle.PrizeStatus.Claimed));
         assertEq(address(raffle).balance, 0);
 
@@ -279,7 +291,7 @@ contract DogeRaffleTest is Test {
         // retry after fixing the receiver succeeds
         rejector.setAllow(true);
         rejector.claim(raffle, roundId);
-        assertEq(address(rejector).balance, 19 ether); // 20 - 5% fee
+        assertEq(address(rejector).balance, 18 ether); // 20 - 5% - 5%
     }
 
     function test_reentrancyDuringClaimBlocked() public {
@@ -290,7 +302,7 @@ contract DogeRaffleTest is Test {
 
         attacker.claim(roundId);
         assertFalse(attacker.reentrySucceeded(), "re-entry blocked by nonReentrant");
-        assertEq(address(attacker).balance, 19 ether); // paid exactly once
+        assertEq(address(attacker).balance, 18 ether); // paid exactly once
     }
 
     // ------------------------------------------------- boundary + races
@@ -318,7 +330,7 @@ contract DogeRaffleTest is Test {
     }
 
     function test_claimVsCommit_cannotDoubleSpend() public {
-        _buySingles(alice, 50); // R1: claim 950
+        _buySingles(alice, 50); // R1: claim 900
         uint256 r1 = _draw();
         uint64 cutoff = raffle.prizeOf(r1).claimCutoff;
         _buySingles(bob, 50); // R2 revenue 1,000
@@ -327,7 +339,7 @@ contract DogeRaffleTest is Test {
         vm.warp(cutoff);
         raffle.commitDraw();
         assertEq(uint8(raffle.prizeOf(r1).status), uint8(DogeRaffle.PrizeStatus.RolledOver));
-        assertEq(raffle.pendingCarry(), 950 ether);
+        assertEq(raffle.pendingCarry(), 900 ether);
         vm.prank(alice);
         vm.expectRevert(DogeRaffle.PrizeNotClaimable.selector);
         raffle.claimPrize(r1);
@@ -346,25 +358,27 @@ contract DogeRaffleTest is Test {
 
         // and when the (very late) commit finally runs, it rolls exactly once
         raffle.commitDraw();
-        assertEq(raffle.pendingCarry(), 19 ether);
+        assertEq(raffle.pendingCarry(), 18 ether);
     }
 
     // ------------------------------------------------------------ rollover
 
-    function test_sowAcceptanceArithmetic_fullScenario() public {
+    function test_acceptanceArithmetic_fullScenario() public {
         // ---- Round 1: 1,000 DOGE new tickets
         _buySingles(alice, 50);
         uint256 r1 = _draw();
-        assertEq(raffle.prizeOf(r1).amount, 950 ether);
-        assertEq(treasury.balance, 49 ether); // fee 50 - bounty 1
+        assertEq(raffle.prizeOf(r1).amount, 900 ether); // 90%
+        assertEq(treasury.balance, 49 ether); // protocol 50 - bounty 1
+        assertEq(foundation.balance, 50 ether); // foundation 50
 
-        // ---- unclaimed; Round 2: 1,000 DOGE new tickets + 950 rollover
+        // ---- unclaimed; Round 2: 1,000 DOGE new tickets + 900 rollover
         _buySingles(bob, 50);
         uint256 r2 = _draw(); // commit settles R1 prize into carry first
 
-        // SoW exact: gross 1,950 -> fee 97.5, prize 1,852.5, treasury +96.5
-        assertEq(raffle.prizeOf(r2).amount, 1852.5 ether);
-        assertEq(treasury.balance, 49 ether + 96.5 ether);
+        // gross 1,900 -> protocol 95 (treasury +94), foundation 95, prize 1,710
+        assertEq(raffle.prizeOf(r2).amount, 1710 ether);
+        assertEq(treasury.balance, 49 ether + 94 ether);
+        assertEq(foundation.balance, 50 ether + 95 ether);
         assertEq(uint8(raffle.prizeOf(r1).status), uint8(DogeRaffle.PrizeStatus.RolledOver));
         assertEq(raffle.pendingCarry(), 0); // consumed by the draw
 
@@ -373,7 +387,8 @@ contract DogeRaffleTest is Test {
         uint256 before = winner.balance;
         vm.prank(winner);
         raffle.claimPrize(r2);
-        assertEq(winner.balance, before + 1852.5 ether);
+        assertEq(winner.balance, before + 1710 ether);
+        assertEq(address(raffle).balance, 0, "every wei of 2,000 accounted for");
     }
 
     function test_claimedPrizeAddsNothingToNextRound() public {
@@ -384,30 +399,32 @@ contract DogeRaffleTest is Test {
 
         _buySingles(bob, 50);
         uint256 r2 = _draw();
-        // R2 pot is fresh revenue only: 1,000 -> prize 950
-        assertEq(raffle.prizeOf(r2).amount, 950 ether);
+        // R2 pot is fresh revenue only: 1,000 -> prize 900
+        assertEq(raffle.prizeOf(r2).amount, 900 ether);
     }
 
     function test_rolloverSurvivesEmptyRounds_noFeeCharged() public {
-        _buySingles(alice, 50); // R1 -> 950 claimable
+        _buySingles(alice, 50); // R1 -> 900 claimable
         _draw();
 
         uint256 treasuryAfterR1 = treasury.balance;
+        uint256 foundationAfterR1 = foundation.balance;
 
         // R2: zero tickets. Commit rolls R1's expired prize into carry, then
-        // rolls the empty round over without fee or bounty.
+        // rolls the empty round over without fees or bounty.
         _draw(); // empty round path
-        assertEq(raffle.pendingCarry(), 950 ether);
-        assertEq(treasury.balance, treasuryAfterR1, "no fee on empty round");
+        assertEq(raffle.pendingCarry(), 900 ether);
+        assertEq(treasury.balance, treasuryAfterR1, "no protocol fee on empty round");
+        assertEq(foundation.balance, foundationAfterR1, "no foundation fee on empty round");
 
         // R3: also empty — carry preserved
         _draw();
-        assertEq(raffle.pendingCarry(), 950 ether);
+        assertEq(raffle.pendingCarry(), 900 ether);
 
-        // R4: ticketed. Gross = 20 + 950 = 970 -> fee 48.5 -> prize 921.5
+        // R4: ticketed. Gross = 20 + 900 = 920 -> fees 46 + 46 -> prize 828
         _buySingles(bob, 1);
         uint256 r4 = _draw();
-        assertEq(raffle.prizeOf(r4).amount, 921.5 ether);
+        assertEq(raffle.prizeOf(r4).amount, 828 ether);
         assertEq(raffle.pendingCarry(), 0);
         vm.prank(bob);
         raffle.claimPrize(r4);
@@ -420,11 +437,11 @@ contract DogeRaffleTest is Test {
 
         // R2 empty: rolls R1 prize once
         _draw();
-        assertEq(raffle.pendingCarry(), 950 ether);
+        assertEq(raffle.pendingCarry(), 900 ether);
 
         // R3 empty: R1 prize must NOT roll again
         _draw();
-        assertEq(raffle.pendingCarry(), 950 ether);
+        assertEq(raffle.pendingCarry(), 900 ether);
         assertEq(uint8(raffle.prizeOf(r1).status), uint8(DogeRaffle.PrizeStatus.RolledOver));
     }
 
@@ -436,14 +453,52 @@ contract DogeRaffleTest is Test {
         raffle.setFeeBps(1000); // raise to 10% mid-round
 
         uint256 r1 = _draw();
-        // active round still charged its snapshotted 5%
-        assertEq(raffle.prizeOf(r1).amount, 950 ether);
+        // active round still charged its snapshotted 5% + 5%
+        assertEq(raffle.prizeOf(r1).amount, 900 ether);
 
-        // next round snapshots the new fee
+        // next round snapshots the new protocol fee; foundation unchanged
         assertEq(_round(raffle.currentRoundId()).feeBps, 1000);
+        assertEq(_round(raffle.currentRoundId()).foundationBps, 500);
         _buySingles(bob, 50);
-        uint256 r2 = _draw(); // R1 unclaimed: gross 1,950 at 10% -> prize 1,755
-        assertEq(raffle.prizeOf(r2).amount, 1755 ether);
+        uint256 r2 = _draw(); // R1 unclaimed: gross 1,900 at 10% + 5% -> prize 1,615
+        assertEq(raffle.prizeOf(r2).amount, 1615 ether);
+    }
+
+    function test_foundationFeeSnapshotAndCap() public {
+        vm.prank(owner);
+        vm.expectRevert(DogeRaffle.FeeTooHigh.selector);
+        raffle.setFoundationBps(1001);
+
+        _buySingles(alice, 50); // bought under 5% / 5%
+        vm.prank(owner);
+        raffle.setFoundationBps(0); // drop foundation fee mid-round
+        uint256 r1 = _draw();
+        assertEq(raffle.prizeOf(r1).amount, 900 ether, "active pot keeps its snapshot");
+        assertEq(foundation.balance, 50 ether);
+
+        vm.prank(alice);
+        raffle.claimPrize(r1);
+        _buySingles(bob, 50);
+        uint256 r2 = _draw(); // 1,000 at 5% + 0% -> prize 950
+        assertEq(raffle.prizeOf(r2).amount, 950 ether);
+        assertEq(foundation.balance, 50 ether, "no foundation fee on the new round");
+    }
+
+    function test_setFoundationWallet() public {
+        address newFoundation = makeAddr("newFoundation");
+        vm.prank(owner);
+        vm.expectRevert(DogeRaffle.ZeroAddress.selector);
+        raffle.setFoundationWallet(address(0));
+        vm.prank(owner);
+        raffle.setFoundationWallet(newFoundation);
+        vm.prank(alice);
+        vm.expectRevert();
+        raffle.setFoundationWallet(alice);
+
+        _buySingles(alice, 50);
+        _draw();
+        assertEq(newFoundation.balance, 50 ether);
+        assertEq(foundation.balance, 0);
     }
 
     function test_intervalChangeNeverMovesExistingCutoff() public {
@@ -470,12 +525,28 @@ contract DogeRaffleTest is Test {
         assertEq(raffle.feeBps(), 1000);
     }
 
-    function test_bountyCappedByFee() public {
-        // pot 20 -> fee 1 DOGE == bounty cap -> treasury 0, keeper +1
+    function test_bountyCappedByProtocolFee() public {
+        // pot 20 -> protocol 1 DOGE == bounty cap -> treasury 0, keeper +1;
+        // the bounty never touches the foundation's 1 DOGE
         _buySingles(alice, 1);
         _draw();
         assertEq(treasury.balance, 0);
         assertEq(keeper.balance, 101 ether);
+        assertEq(foundation.balance, 1 ether);
+    }
+
+    function test_failedFoundationPushFallsBackToWithdrawable() public {
+        RejectingReceiver badFoundation = new RejectingReceiver();
+        vm.prank(owner);
+        raffle.setFoundationWallet(address(badFoundation));
+
+        _buySingles(alice, 50);
+        _draw(); // draw must not be blocked by a reverting foundation wallet
+
+        assertEq(raffle.withdrawable(address(badFoundation)), 50 ether);
+        badFoundation.setAllow(true);
+        badFoundation.withdraw(raffle);
+        assertEq(address(badFoundation).balance, 50 ether);
     }
 
     function test_failedTreasuryPushFallsBackToWithdrawable() public {
@@ -575,20 +646,20 @@ contract DogeRaffleTest is Test {
 
         // before cutoff: rollover is possible, not guaranteed
         (uint256 amount, uint64 cutoff, bool stillClaimable) = raffle.pendingRollover();
-        assertEq(amount, 950 ether);
+        assertEq(amount, 900 ether);
         assertTrue(stillClaimable);
         assertEq(raffle.guaranteedPot(), 1000 ether);
 
         // past cutoff, pre-settlement: eligible/pending, still not settled
         vm.warp(cutoff);
         (amount,, stillClaimable) = raffle.pendingRollover();
-        assertEq(amount, 950 ether);
+        assertEq(amount, 900 ether);
         assertFalse(stillClaimable);
         assertEq(raffle.guaranteedPot(), 1000 ether);
 
         // settled at commit: now in the guaranteed pot... (consumed at finalize)
         raffle.commitDraw();
-        assertEq(raffle.guaranteedPot(), 1950 ether);
+        assertEq(raffle.guaranteedPot(), 1900 ether);
         (amount,,) = raffle.pendingRollover();
         assertEq(amount, 0);
         r1; // silence unused
@@ -611,7 +682,7 @@ contract DogeRaffleTest is Test {
         address w1 = _round(r1).winner;
         assertEq(
             address(raffle).balance,
-            p1.amount + raffle.withdrawable(treasury),
+            p1.amount + raffle.withdrawable(treasury) + raffle.withdrawable(foundation),
             "post-draw escrow accounting"
         );
 
@@ -626,8 +697,8 @@ contract DogeRaffleTest is Test {
 
         DogeRaffle.Prize memory p2 = raffle.prizeOf(r2);
         uint256 expectedGross = 60 ether + (claimR1 ? 0 : p1.amount);
-        uint256 expectedFee = (expectedGross * 500) / 10_000;
-        assertEq(p2.amount, expectedGross - expectedFee, "fee on full gross incl. rollover");
+        uint256 expectedFees = (expectedGross * 500) / 10_000 + (expectedGross * 500) / 10_000;
+        assertEq(p2.amount, expectedGross - expectedFees, "both fees on full gross incl. rollover");
 
         // drain: winner claims, invariant -> zero
         address w2 = _round(r2).winner;
@@ -635,7 +706,8 @@ contract DogeRaffleTest is Test {
         raffle.claimPrize(r2);
         assertEq(
             address(raffle).balance,
-            raffle.withdrawable(treasury) + raffle.withdrawable(alice) + raffle.withdrawable(bob),
+            raffle.withdrawable(treasury) + raffle.withdrawable(foundation) + raffle.withdrawable(alice)
+                + raffle.withdrawable(bob),
             "all residue is pull-credits"
         );
     }

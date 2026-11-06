@@ -167,11 +167,15 @@ export default function Home() {
     refetchPastPrizes,
   ]);
 
-  const totalTickets = round?.[5] ?? ZERO;
+  // rounds tuple: start, end, randomnessBlock, status, feeBps, foundationBps, tickets, pot, winner
+  const totalTickets = round?.[6] ?? ZERO;
   const endTime = round?.[1] ?? ZERO;
   const roundFeeBps = BigInt(round?.[4] ?? 500);
+  const roundFoundationBps = BigInt(round?.[5] ?? 500);
+  const totalFeeBps = roundFeeBps + roundFoundationBps;
   const gPot = guaranteedPot ?? ZERO;
-  const guaranteedPrize = gPot - (gPot * roundFeeBps) / BPS;
+  const guaranteedPrize = gPot - (gPot * totalFeeBps) / BPS;
+  const winnerPct = (10_000 - Number(totalFeeBps)) / 100;
   const odds =
     myTickets && totalTickets > ZERO
       ? ((Number(myTickets) / Number(totalTickets)) * 100).toFixed(1)
@@ -194,7 +198,7 @@ export default function Home() {
     prevId !== undefined &&
     prevRound &&
     prevPrize &&
-    prevRound[7]?.toLowerCase() === address.toLowerCase() &&
+    prevRound[8]?.toLowerCase() === address.toLowerCase() &&
     prevPrize.status === PrizeStatus.Claimable &&
     nowSec !== null &&
     nowSec < Number(prevPrize.claimCutoff)
@@ -228,8 +232,9 @@ export default function Home() {
               Doge Raffle
             </h1>
             <p className="font-medium text-amber-800/80">
-              A winner every 30 days · {Number(roundFeeBps) / 100}% protocol
-              fee · verifiable on-chain draws
+              A winner every 30 days · {winnerPct}% to the winner ·{" "}
+              {Number(roundFoundationBps) / 100}% to the Dogecoin Foundation
+              · verifiable on-chain draws
             </p>
           </div>
         </div>
@@ -293,9 +298,10 @@ export default function Home() {
           {fmt(gPot)} <span className="text-3xl text-amber-400">DOGE</span>
         </div>
         <div className="mt-2 text-sm text-stone-500">
-          Winner takes {fmt(guaranteedPrize)} DOGE after the{" "}
-          {Number(roundFeeBps) / 100}% fee · {totalTickets.toString()} tickets
-          sold
+          Winner takes {fmt(guaranteedPrize)} DOGE ({winnerPct}%) ·{" "}
+          {Number(roundFeeBps) / 100}% protocol ·{" "}
+          {Number(roundFoundationBps) / 100}% Dogecoin Foundation ·{" "}
+          {totalTickets.toString()} tickets sold
         </div>
         {rollAmount > ZERO && (
           <div className="mt-3 rounded-xl border border-amber-200 bg-amber-50 p-3 text-sm text-amber-900">
@@ -448,7 +454,7 @@ export default function Home() {
         <ul className="space-y-2">
           {pastRounds?.map((r, i) => {
             if (r.status !== "success") return null;
-            const [, , , status, , tickets, , winner] = r.result;
+            const [, , , status, , , tickets, , winner] = r.result;
             const prize = pastPrizes?.[i]?.result;
             return (
               <li
@@ -499,8 +505,9 @@ export default function Home() {
           </span>
         </div>
         Winners claim their own prize (and pay gas) before a fixed deadline —
-        unclaimed prizes roll into the next jackpot, where the protocol fee
-        applies to the full gross pot including rolled funds. Draws are
+        unclaimed prizes roll into the next jackpot, where the protocol and
+        Dogecoin Foundation fees apply to the full gross pot including rolled
+        funds. Draws are
         permissionless: once the countdown hits zero anyone can call{" "}
         <code>commitDraw()</code> then <code>finalizeDraw()</code> and earn a 1
         DOGE bounty from the fee. Draw randomness is verified on-chain (VRF)

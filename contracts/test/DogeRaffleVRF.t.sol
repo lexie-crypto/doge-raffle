@@ -29,11 +29,12 @@ contract DogeRaffleVRFTest is Test {
     MockCoordinator internal mock;
     address internal owner = makeAddr("owner");
     address internal treasury = makeAddr("treasury");
+    address internal foundation = makeAddr("foundation");
     address internal alice = makeAddr("alice");
     address internal keeper = makeAddr("keeper");
 
     function setUp() public {
-        raffle = new DogeRaffle(owner, treasury);
+        raffle = new DogeRaffle(owner, treasury, foundation);
         mock = new MockCoordinator();
         vm.prank(owner);
         raffle.setVrfCoordinator(address(mock));
@@ -42,7 +43,7 @@ contract DogeRaffleVRFTest is Test {
     }
 
     function _roundEnd() internal view returns (uint64 endTime) {
-        (, endTime,,,,,,) = raffle.rounds(raffle.currentRoundId());
+        (, endTime,,,,,,,) = raffle.rounds(raffle.currentRoundId());
     }
 
     function _buyAndCommit() internal returns (uint256 roundId) {
@@ -66,12 +67,13 @@ contract DogeRaffleVRFTest is Test {
         uint256 roundId = _buyAndCommit();
         mock.deliver(1, 424242);
 
-        (,,,,,,, address winner) = raffle.rounds(roundId);
+        (,,,,,,,, address winner) = raffle.rounds(roundId);
         assertEq(winner, alice);
         DogeRaffle.Prize memory prize = raffle.prizeOf(roundId);
-        assertEq(prize.amount, 19 ether); // 20 - 5%
-        // full fee to treasury: no bounty on the VRF path
+        assertEq(prize.amount, 18 ether); // 20 - 5% - 5%
+        // full protocol fee to treasury (no bounty on the VRF path), 5% to the foundation
         assertEq(treasury.balance, 1 ether);
+        assertEq(foundation.balance, 1 ether);
         assertEq(raffle.currentRoundId(), roundId + 1);
 
         // winner claims as usual
@@ -89,7 +91,7 @@ contract DogeRaffleVRFTest is Test {
 
     function test_fallbackBlockedBeforeTimeout() public {
         uint256 roundId = _buyAndCommit();
-        (,, uint64 rb,,,,,) = raffle.rounds(roundId);
+        (,, uint64 rb,,,,,,) = raffle.rounds(roundId);
         vm.roll(uint256(rb) + 1);
         assertFalse(raffle.canFinalize());
         vm.prank(keeper);
@@ -99,14 +101,14 @@ contract DogeRaffleVRFTest is Test {
 
     function test_fallbackSettlesAfterTimeout_withBounty() public {
         uint256 roundId = _buyAndCommit();
-        (,, uint64 rb,,,,,) = raffle.rounds(roundId);
+        (,, uint64 rb,,,,,,) = raffle.rounds(roundId);
         vm.roll(uint256(rb) + 1);
         vm.warp(block.timestamp + raffle.vrfTimeout());
         assertTrue(raffle.canFinalize());
 
         vm.prank(keeper);
         raffle.finalizeDraw();
-        (,,,,,,, address winner) = raffle.rounds(roundId);
+        (,,,,,,,, address winner) = raffle.rounds(roundId);
         assertEq(winner, alice);
         // bounty paid on the fallback path (fee 1 == bounty cap)
         assertEq(keeper.balance, 101 ether);
@@ -119,7 +121,7 @@ contract DogeRaffleVRFTest is Test {
 
     function test_vrfAfterFallback_cannotDoubleSettle() public {
         uint256 roundId = _buyAndCommit();
-        (,, uint64 rb,,,,,) = raffle.rounds(roundId);
+        (,, uint64 rb,,,,,,) = raffle.rounds(roundId);
         vm.roll(uint256(rb) + 1);
         vm.warp(block.timestamp + raffle.vrfTimeout());
         vm.prank(keeper);
@@ -145,12 +147,12 @@ contract DogeRaffleVRFTest is Test {
         raffle.setVrfCoordinator(address(0));
         uint256 roundId = _buyAndCommit();
         assertEq(raffle.vrfRequestOf(roundId), 0);
-        (,, uint64 rb,,,,,) = raffle.rounds(roundId);
+        (,, uint64 rb,,,,,,) = raffle.rounds(roundId);
         vm.roll(uint256(rb) + 1);
         // no timeout gate without a request
         vm.prank(keeper);
         raffle.finalizeDraw();
-        (,,,,,,, address winner) = raffle.rounds(roundId);
+        (,,,,,,,, address winner) = raffle.rounds(roundId);
         assertEq(winner, alice);
     }
 
@@ -181,9 +183,9 @@ contract DogeRaffleVRFTest is Test {
         VRF.Proof memory proof = _ffiProve(ORACLE_SK, seed);
         coordinator.fulfill(proof, requestId);
 
-        (,,,,,,, address winner) = raffle.rounds(roundId);
+        (,,,,,,,, address winner) = raffle.rounds(roundId);
         assertEq(winner, alice);
-        assertEq(raffle.prizeOf(roundId).amount, 19 ether);
+        assertEq(raffle.prizeOf(roundId).amount, 18 ether);
         assertEq(raffle.currentRoundId(), roundId + 1);
 
         // randomness matches the VRF output rule

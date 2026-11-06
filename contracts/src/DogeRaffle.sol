@@ -20,12 +20,15 @@ interface IVRFCoordinator {
 /// fixed the moment that round opens. An unclaimed prize is extinguished at
 /// the next round's close and rolled into that round's jackpot exactly once.
 ///
-/// Fees: every ticketed draw charges `feeBps` (snapshotted when the round
-/// opens, default 5%, hard-capped at 10%) on the FULL gross pot — new ticket
-/// revenue plus any rolled-over prize money (rollover funds are deliberately
-/// charged again). A fixed bounty, paid out of the fee, rewards whoever calls
-/// the draw, so the draw is permissionless and needs no privileged keeper.
-/// Rounds with no tickets charge no fee and carry any rolled jackpot forward.
+/// Fees: every ticketed draw charges two fees on the FULL gross pot (new
+/// ticket revenue plus any rolled-over prize money — rollover funds are
+/// deliberately charged again): `feeBps` to the protocol treasury and
+/// `foundationBps` to the Dogecoin Foundation wallet, each default 5% and
+/// each hard-capped at 10%, both snapshotted when the round opens. The
+/// winner receives the remainder (90% by default). A fixed bounty, paid out
+/// of the PROTOCOL fee, rewards whoever calls the draw, so the draw is
+/// permissionless and needs no privileged keeper. Rounds with no tickets
+/// charge no fees and carry any rolled jackpot forward.
 ///
 /// Randomness: primary source is DogeVRFCoordinator (on-chain-verified ECVRF
 /// — unforgeable by oracle and sequencer alike). commitDraw requests a VRF
@@ -83,7 +86,8 @@ contract DogeRaffle is Ownable2Step, Pausable, ReentrancyGuard, IVRFConsumer {
         uint64 endTime;
         uint64 randomnessBlock; // block whose hash seeds the draw (set on commit)
         RoundStatus status;
-        uint16 feeBps; // fee snapshotted at round open — immutable for this pot
+        uint16 feeBps; // protocol fee snapshotted at round open — immutable for this pot
+        uint16 foundationBps; // Dogecoin Foundation fee, snapshotted likewise
         uint96 totalTickets;
         uint256 pot; // NEW ticket revenue only (rollover tracked in pendingCarry)
         address winner;
@@ -97,12 +101,14 @@ contract DogeRaffle is Ownable2Step, Pausable, ReentrancyGuard, IVRFConsumer {
 
     // ---------------------------------------------------------------- state
 
-    uint256 public constant MAX_FEE_BPS = 1000; // 10% hard cap
+    uint256 public constant MAX_FEE_BPS = 1000; // 10% hard cap, per fee
     uint256 public constant BPS = 10_000;
     uint64 public constant MIN_DRAW_INTERVAL = 10 minutes;
     uint64 public constant RANDOMNESS_DELAY = 10; // blocks between commit and draw
 
-    uint256 public feeBps = 500; // 5% — applied to rounds opened after a change
+    uint256 public feeBps = 500; // protocol 5% — applied to rounds opened after a change
+    uint256 public foundationBps = 500; // Dogecoin Foundation 5% — likewise
+    address public foundationWallet;
     uint64 public drawInterval = 30 days;
     uint256 public callerBounty = 1 ether; // 1 DOGE, paid from the fee
     address public treasury;
@@ -142,7 +148,8 @@ contract DogeRaffle is Ownable2Step, Pausable, ReentrancyGuard, IVRFConsumer {
         uint256 indexed roundId,
         address indexed winner,
         uint256 prize,
-        uint256 fee,
+        uint256 protocolFee,
+        uint256 foundationFee,
         uint256 grossPot,
         uint256 totalTickets
     );
@@ -150,11 +157,15 @@ contract DogeRaffle is Ownable2Step, Pausable, ReentrancyGuard, IVRFConsumer {
     event PrizeClaimed(uint256 indexed roundId, address indexed winner, uint256 amount);
     event PrizeRolledOver(uint256 indexed roundId, uint256 amount, uint256 indexed intoRoundId);
     event EmptyRoundRolledOver(uint256 indexed roundId, uint256 carriedJackpot);
-    event RoundStarted(uint256 indexed roundId, uint64 startTime, uint64 endTime, uint16 feeBps);
+    event RoundStarted(
+        uint256 indexed roundId, uint64 startTime, uint64 endTime, uint16 feeBps, uint16 foundationBps
+    );
     event PayoutCredited(address indexed to, uint256 amount);
     event PayoutWithdrawn(address indexed to, uint256 amount);
     event BundlesSet(Bundle[] bundles);
     event FeeBpsSet(uint256 feeBps);
+    event FoundationBpsSet(uint256 foundationBps);
+    event FoundationWalletSet(address foundationWallet);
     event DrawIntervalSet(uint64 drawInterval);
     event CallerBountySet(uint256 bounty);
     event TreasurySet(address treasury);
@@ -188,9 +199,10 @@ contract DogeRaffle is Ownable2Step, Pausable, ReentrancyGuard, IVRFConsumer {
 
     // ---------------------------------------------------------- constructor
 
-    constructor(address initialOwner, address treasury_) Ownable(initialOwner) {
-        if (treasury_ == address(0)) revert ZeroAddress();
+    constructor(address initialOwner, address treasury_, address foundationWallet_) Ownable(initialOwner) {
+        if (treasury_ == address(0) || foundationWallet_ == address(0)) revert ZeroAddress();
         treasury = treasury_;
+        foundationWallet = foundationWallet_;
 
         // Default pricing (owner-configurable via setBundles):
         // 1 ticket = 20 DOGE, 5 = 90 (10% off), 10 = 170 (15% off)
@@ -308,27 +320,29 @@ contract DogeRaffle is Ownable2Step, Pausable, ReentrancyGuard, IVRFConsumer {
     }
 
     /// Shared settlement: pick the winner from `randomness`, escrow the
-    /// prize, pay treasury (and the bounty when `bountyTo` is nonzero), and
-    /// open the next round. The prize is ESCROWED as a claim, never pushed.
+    /// prize, pay the protocol treasury and the Dogecoin Foundation (and the
+    /// bounty when `bountyTo` is nonzero), and open the next round. The prize
+    /// is ESCROWED as a claim, never pushed.
     function _settleDraw(uint256 roundId, uint256 randomness, address bountyTo) private {
         Round storage round = rounds[roundId];
         uint96 totalTickets = round.totalTickets;
         uint256 winningTicket = randomness % totalTickets;
         address winner = _ownerOfTicket(roundId, winningTicket);
 
-        // Gross pot = new ticket revenue + all eligible rollover. The fee is
-        // deliberately charged on the FULL gross, including rolled funds.
+        // Gross pot = new ticket revenue + all eligible rollover. Both fees
+        // are deliberately charged on the FULL gross, including rolled funds.
         uint256 gross = round.pot + pendingCarry;
         pendingCarry = 0;
-        uint256 fee = (gross * round.feeBps) / BPS;
-        uint256 bounty = bountyTo == address(0) ? 0 : (callerBounty < fee ? callerBounty : fee);
-        uint256 prizeAmount = gross - fee;
+        uint256 protocolFee = (gross * round.feeBps) / BPS;
+        uint256 foundationFee = (gross * round.foundationBps) / BPS;
+        uint256 bounty = bountyTo == address(0) ? 0 : (callerBounty < protocolFee ? callerBounty : protocolFee);
+        uint256 prizeAmount = gross - protocolFee - foundationFee;
 
         round.status = RoundStatus.Finalized;
         round.winner = winner;
         prizes[roundId] = Prize({amount: prizeAmount, claimCutoff: 0, status: PrizeStatus.Claimable});
 
-        emit WinnerDrawn(roundId, winner, prizeAmount, fee, gross, totalTickets);
+        emit WinnerDrawn(roundId, winner, prizeAmount, protocolFee, foundationFee, gross, totalTickets);
 
         // Open the next round, then fix this prize's cutoff to its scheduled
         // end — immutable from here on, whatever happens to drawInterval.
@@ -338,7 +352,8 @@ contract DogeRaffle is Ownable2Step, Pausable, ReentrancyGuard, IVRFConsumer {
         emit PrizeClaimable(roundId, winner, prizeAmount, cutoff);
 
         // interactions last (all state above is final)
-        _pay(treasury, fee - bounty);
+        _pay(treasury, protocolFee - bounty);
+        _pay(foundationWallet, foundationFee);
         if (bounty != 0) _pay(bountyTo, bounty);
     }
 
@@ -406,8 +421,10 @@ contract DogeRaffle is Ownable2Step, Pausable, ReentrancyGuard, IVRFConsumer {
         round.startTime = uint64(block.timestamp);
         round.endTime = uint64(block.timestamp) + drawInterval;
         round.status = RoundStatus.Open;
-        round.feeBps = uint16(feeBps); // snapshot: owner can't re-fee an active pot
-        emit RoundStarted(roundId, round.startTime, round.endTime, round.feeBps);
+        // snapshot both fees: owner can't re-fee an active pot
+        round.feeBps = uint16(feeBps);
+        round.foundationBps = uint16(foundationBps);
+        emit RoundStarted(roundId, round.startTime, round.endTime, round.feeBps, round.foundationBps);
     }
 
     /// Binary search over cumulative ticket ranges: first entry whose
@@ -440,11 +457,25 @@ contract DogeRaffle is Ownable2Step, Pausable, ReentrancyGuard, IVRFConsumer {
         emit BundlesSet(newBundles);
     }
 
-    /// Applies to rounds OPENED after the change (each round snapshots its fee).
+    /// Protocol fee. Applies to rounds OPENED after the change (each round
+    /// snapshots its fees).
     function setFeeBps(uint256 newFeeBps) external onlyOwner {
         if (newFeeBps > MAX_FEE_BPS) revert FeeTooHigh();
         feeBps = newFeeBps;
         emit FeeBpsSet(newFeeBps);
+    }
+
+    /// Dogecoin Foundation fee. Applies to rounds OPENED after the change.
+    function setFoundationBps(uint256 newFoundationBps) external onlyOwner {
+        if (newFoundationBps > MAX_FEE_BPS) revert FeeTooHigh();
+        foundationBps = newFoundationBps;
+        emit FoundationBpsSet(newFoundationBps);
+    }
+
+    function setFoundationWallet(address newWallet) external onlyOwner {
+        if (newWallet == address(0)) revert ZeroAddress();
+        foundationWallet = newWallet;
+        emit FoundationWalletSet(newWallet);
     }
 
     /// Applies to rounds STARTED after the current one ends. Never alters an
