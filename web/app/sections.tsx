@@ -317,7 +317,7 @@ const FAQ = [
   },
   {
     q: "How much are tickets?",
-    a: "1 ticket is 20 DOGE, 5 are 90 DOGE and 10 are 170 DOGE. Bundles are cheaper per ticket. There is no limit on how many you buy.",
+    a: "1 ticket is 20 DOGE, 5 are 90, 10 are 170, 100 are 1,600 and 1,000 are 15,000 — the bigger the bundle, the cheaper each ticket (down to 15 DOGE). There is no limit on how many you buy.",
   },
   {
     q: "When is the draw?",
@@ -337,7 +337,7 @@ const FAQ = [
   },
   {
     q: "Is this real money?",
-    a: "Not yet — this is running on the DogeOS testnet with free test DOGE. Paid raffles are regulated in many places; real-money launch waits on mainnet and legal clearance.",
+    a: "Not yet — this is running on the DogeOS testnet with free test DOGE.",
   },
 ];
 

@@ -105,16 +105,25 @@ export function CoinRain({ count = 10 }: { count?: number }) {
   );
 }
 
-/** A little stack of coins, used on the bundle cards. */
-export function CoinStack({ coins }: { coins: number }) {
+/** A little stack of coins, used on the bundle cards: one coin per ticket up
+ * to 10, then a "+N" chip for the rest. */
+export function CoinStack({ coins, size = 44 }: { coins: number; size?: number }) {
   const shown = Math.min(coins, 10);
+  const step = shown > 5 ? Math.round(size * 0.45) : Math.round(size * 0.55);
   return (
-    <div className="relative h-14" style={{ width: 44 + (shown - 1) * 24 }} aria-hidden>
-      {Array.from({ length: shown }, (_, i) => (
-        <div key={i} className="absolute" style={{ left: i * 24, top: i % 2 ? 4 : 0, zIndex: i }}>
-          <DogeCoin size={44} className="drop-shadow" />
-        </div>
-      ))}
+    <div className="flex items-center gap-2" aria-hidden>
+      <div className="relative" style={{ width: size + (shown - 1) * step, height: size + 4 }}>
+        {Array.from({ length: shown }, (_, i) => (
+          <div key={i} className="absolute" style={{ left: i * step, top: i % 2 ? 4 : 0, zIndex: i }}>
+            <DogeCoin size={size} className="drop-shadow" />
+          </div>
+        ))}
+      </div>
+      {coins > 10 && (
+        <span className="display rounded-full bg-amber-950 px-2.5 py-1 text-xs font-bold text-amber-300">
+          +{(coins - 10).toLocaleString()}
+        </span>
+      )}
     </div>
   );
 }

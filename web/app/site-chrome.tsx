@@ -14,9 +14,8 @@ const short = (a: string) => `${a.slice(0, 6)}…${a.slice(-4)}`;
 
 const LINKS = [
   { href: "/#how", label: "How it works", page: "/" },
-  { href: "/#split", label: "Pot split", page: "/" },
-  { href: "/#my-tickets", label: "My tickets", page: "/" },
-  { href: "/#draws", label: "Past draws", page: "/" },
+  { href: "/my-tickets", label: "My tickets", page: "/my-tickets" },
+  { href: "/my-tickets#draws", label: "Past draws", page: "" },
   { href: "/vrf", label: "VRF", page: "/vrf" },
   { href: "/docs", label: "Docs", page: "/docs" },
 ];
@@ -33,7 +32,7 @@ export function SiteNav() {
         </Link>
         <div className="hidden items-center gap-1 text-sm font-semibold text-amber-900/80 lg:flex">
           {LINKS.map((l) => {
-            const active = l.page !== "/" && pathname.startsWith(l.page);
+            const active = l.page !== "/" && l.page !== "" && pathname.startsWith(l.page);
             const isVrf = l.label === "VRF";
             return (
               <Link
@@ -126,6 +125,7 @@ export function SiteFooter() {
         <div className="space-y-2 text-sm">
           <div className="display mb-3 text-lg font-bold text-amber-200">Explore</div>
           <Link href="/" className="block hover:text-amber-300">Raffle</Link>
+          <Link href="/my-tickets" className="block hover:text-amber-300">My tickets & past draws</Link>
           <Link href="/#faq" className="block hover:text-amber-300">FAQ</Link>
           <Link href="/vrf" className="block hover:text-amber-300">DogeOS VRF</Link>
           <Link href="/docs" className="block hover:text-amber-300">Developer docs</Link>

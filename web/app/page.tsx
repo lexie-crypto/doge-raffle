@@ -11,8 +11,9 @@ import {
 } from "wagmi";
 import { PrizeStatus, raffleAbi } from "@/lib/abi";
 import { RAFFLE_ADDRESS, dogeosChikyu } from "@/lib/chain";
-import { CoinRain, CoinStack, DogeCoin, DogeOSBadge, Rays, WowSeal } from "./doge";
-import { MyTickets } from "./my-tickets";
+import Link from "next/link";
+import { BundleCarousel, BuyModal } from "./bundles";
+import { CoinRain, DogeCoin, DogeOSBadge, Rays, WowSeal } from "./doge";
 import { ensureDogeOs, useSafeWrite } from "./use-safe-write";
 import { SiteFooter, SiteNav } from "./site-chrome";
 import {
@@ -84,7 +85,6 @@ export default function Home() {
   const address = mounted ? liveAddress : undefined;
   const { write: writeContract, txHash, isPending, error: txError } = useSafeWrite();
   const [claimRecipient, setClaimRecipient] = useState("");
-  const [payoutRecipient, setPayoutRecipient] = useState("");
   const { isLoading: txConfirming, isSuccess: txConfirmed } = useWaitForTransactionReceipt({
     hash: txHash,
   });
@@ -168,15 +168,6 @@ export default function Home() {
     query: { enabled: pastIds.length > 0 },
   });
 
-  const { data: pastWinningTickets } = useReadContracts({
-    contracts: pastIds.map((id) => ({
-      ...raffle,
-      functionName: "winningTicketOf" as const,
-      args: [id] as const,
-    })),
-    query: { enabled: pastIds.length > 0 },
-  });
-
   useEffect(() => {
     if (txConfirmed) {
       refetchRound();
@@ -234,15 +225,7 @@ export default function Home() {
 
   const deployed = RAFFLE_ADDRESS !== ZERO_ADDR;
 
-  function prizeStatusLabel(status: number, cutoff: bigint): string {
-    if (status === PrizeStatus.Claimed) return "claimed";
-    if (status === PrizeStatus.RolledOver) return "unclaimed — rolled into next jackpot";
-    if (status === PrizeStatus.Claimable) {
-      if (nowSec !== null && nowSec >= Number(cutoff)) return "expired — rollover pending";
-      return "awaiting claim";
-    }
-    return "";
-  }
+  const [buyOpen, setBuyOpen] = useState(false);
 
   function buy(bundleIndex: number, price: bigint) {
     if (!isConnected) {
@@ -346,12 +329,12 @@ export default function Home() {
             </div>
 
             <div className="mt-6 flex flex-wrap gap-3">
-              <a
-                href="#buy"
+              <button
+                onClick={() => setBuyOpen(true)}
                 className="doge-btn pulse-glow display rounded-full bg-amber-500 px-8 py-4 text-lg font-bold text-white shadow-lg hover:bg-amber-400"
               >
                 Get tickets
-              </a>
+              </button>
               <a
                 href="#how"
                 className="doge-btn display rounded-full border-2 border-amber-950 bg-white px-8 py-4 text-lg font-bold text-amber-950"
@@ -495,71 +478,12 @@ export default function Home() {
           <SectionHeading id="buy" kicker="Tickets" title="Grab your tickets">
             Every ticket is one chance to win. Bundles are cheaper per ticket.
           </SectionHeading>
-          <div className="grid gap-6 md:grid-cols-3">
-            {(bundles ?? []).map((b, i) => {
-              const tier = ["Starter", "Most popular", "Best value"][i] ?? "";
-              const featured = i === 1;
-              const single = bundles?.[0];
-              const savePct =
-                single && b.tickets > 1
-                  ? Math.round(
-                      (1 - Number(b.price) / (Number(single.price) * b.tickets)) * 100,
-                    )
-                  : 0;
-              return (
-                <button
-                  key={i}
-                  disabled={!deployed || busy}
-                  onClick={() => buy(i, b.price)}
-                  className={`ticket doge-btn group text-left disabled:cursor-not-allowed disabled:opacity-50 ${
-                    featured ? "md:-translate-y-3" : ""
-                  }`}
-                >
-                  <div
-                    className={`p-6 pb-5 ${featured ? "gold-card" : "bg-white"}`}
-                  >
-                    <div className="flex items-start justify-between">
-                      <span
-                        className={`display rounded-full px-3 py-1 text-xs font-bold uppercase tracking-wider ${
-                          featured ? "bg-amber-950 text-amber-300" : "bg-amber-100 text-amber-700"
-                        }`}
-                      >
-                        {tier}
-                      </span>
-                      {savePct > 0 && (
-                        <span className="display text-sm font-bold text-emerald-600">
-                          save {savePct}%
-                        </span>
-                      )}
-                    </div>
-                    <div className="mt-4 flex items-center gap-4">
-                      <CoinStack coins={b.tickets} />
-                    </div>
-                    <div className="display mt-3 text-4xl font-bold text-amber-950">
-                      {b.tickets} ticket{b.tickets > 1 ? "s" : ""}
-                    </div>
-                  </div>
-                  <div
-                    className={`ticket-perf flex items-center justify-between px-6 py-4 ${
-                      featured ? "gold-card" : "bg-white"
-                    }`}
-                  >
-                    <div>
-                      <div className="display text-2xl font-bold text-amber-700">
-                        {fmt(b.price, 0)} DOGE
-                      </div>
-                      <div className="text-xs text-amber-900/60">
-                        {fmt(b.price / BigInt(b.tickets), 1)} DOGE per ticket
-                      </div>
-                    </div>
-                    <span className="display rounded-full bg-amber-500 px-4 py-2 text-sm font-bold text-white transition group-hover:bg-amber-600">
-                      {isConnected ? "Buy" : "Connect & buy"}
-                    </span>
-                  </div>
-                </button>
-              );
-            })}
-          </div>
+          <BundleCarousel
+            bundles={bundles ?? []}
+            isConnected={isConnected}
+            disabled={!deployed || busy}
+            onBuy={buy}
+          />
           {txHash && (
             <p className="mt-5 text-center text-sm">
               {txConfirming ? "Confirming… " : txConfirmed ? "Confirmed ✅ " : ""}
@@ -573,61 +497,21 @@ export default function Home() {
           )}
         </section>
 
-        {/* ============================================================ MY TICKETS */}
-        <section id="my-tickets" className="scroll-mt-24 pt-20">
-          <MyTickets
-            nowSec={nowSec}
-            busy={busy}
-            onClaim={(id) =>
-              writeContract({
-                ...raffle,
-                functionName: "claimPrize",
-                args: [id],
-                chainId: dogeosChikyu.id,
-              })
-            }
-          />
-          {pendingPayout !== undefined && pendingPayout > ZERO && (
-            <div className="mt-4 rounded-2xl border-2 border-emerald-300 bg-emerald-50 p-5">
-              <div className="font-semibold text-emerald-800">
-                You have {fmt(pendingPayout)} DOGE waiting from a payout that couldn&apos;t be sent automatically.
+        {/* ============================================================ MY TICKETS LINK */}
+        <section className="pt-16">
+          <Link
+            href="/my-tickets"
+            className="doge-btn mx-auto flex max-w-3xl flex-wrap items-center gap-5 rounded-3xl border-2 border-amber-300 bg-white p-6 shadow-lg shadow-amber-100"
+          >
+            <DogeCoin size={56} className="bob shrink-0" />
+            <div className="min-w-0 flex-1">
+              <div className="display text-2xl font-bold text-amber-950">My tickets & past draws</div>
+              <div className="text-amber-900/70">
+                See your ticket numbers, every round you entered, and each draw&apos;s winning ticket.
               </div>
-              <button
-                onClick={() =>
-                  writeContract({ ...raffle, functionName: "withdrawPayout", chainId: dogeosChikyu.id })
-                }
-                disabled={busy}
-                className="doge-btn mt-3 rounded-full bg-emerald-600 px-5 py-2 font-semibold text-white disabled:opacity-40"
-              >
-                Withdraw
-              </button>
-              {supportsRedirect && <details className="mt-3 text-sm text-emerald-900">
-                <summary className="cursor-pointer font-semibold underline">Withdraw to another address</summary>
-                <p className="mt-2">Use this if your wallet rejects an incoming DOGE transfer.</p>
-                <input
-                  aria-label="Payout recipient address"
-                  value={payoutRecipient}
-                  onChange={(event) => setPayoutRecipient(event.target.value.trim())}
-                  placeholder="0x..."
-                  className="mt-2 w-full max-w-md rounded-lg border border-emerald-500 bg-white p-2 font-mono text-sm"
-                />
-                <button
-                  onClick={() =>
-                    writeContract({
-                      ...raffle,
-                      functionName: "withdrawPayoutTo",
-                      args: [payoutRecipient as `0x${string}`],
-                      chainId: dogeosChikyu.id,
-                    })
-                  }
-                  disabled={busy || !isAddress(payoutRecipient) || payoutRecipient === ZERO_ADDR}
-                  className="doge-btn mt-2 block rounded-full bg-emerald-700 px-5 py-2 font-semibold text-white disabled:opacity-40"
-                >
-                  Withdraw to this address
-                </button>
-              </details>}
             </div>
-          )}
+            <span className="display rounded-full bg-amber-950 px-5 py-2.5 font-bold text-amber-300">Open →</span>
+          </Link>
         </section>
 
         {/* ============================================================ HOW */}
@@ -659,61 +543,6 @@ export default function Home() {
           <Fairness totalTickets={totalTickets} />
         </section>
 
-        {/* ============================================================ PAST DRAWS */}
-        <section className="pt-24">
-          <SectionHeading id="draws" kicker="Hall of fame" title="Past draws" />
-          {pastIds.length === 0 ? (
-            <div className="mx-auto flex max-w-xl flex-col items-center rounded-3xl border-2 border-dashed border-amber-300 bg-white/60 p-8 text-center">
-              <WowSeal size={90} className="bob" />
-              <p className="display mt-3 text-xl font-bold text-amber-950">The first draw is coming up</p>
-              <p className="mt-1 text-amber-900/70">
-                <DrawDate endTime={endTime} /> — winners will be listed here.
-              </p>
-            </div>
-          ) : (
-            <ul className="mx-auto max-w-4xl space-y-3">
-              {pastRounds?.map((r, i) => {
-                if (r.status !== "success") return null;
-                const [, , , status, , , tickets, , winner] = r.result;
-                const prize = pastPrizes?.[i]?.result;
-                const won = status === 2 && winner !== ZERO_ADDR && prize;
-                return (
-                  <li
-                    key={pastIds[i].toString()}
-                    className="flex flex-wrap items-center gap-4 rounded-2xl border-2 border-amber-200 bg-white p-4 shadow-sm"
-                  >
-                    <div className="display flex h-14 w-14 shrink-0 items-center justify-center rounded-2xl bg-amber-950 text-xl font-bold text-amber-300">
-                      #{pastIds[i].toString()}
-                    </div>
-                    {won ? (
-                      <div className="min-w-0 flex-1">
-                        <div className="display text-xl font-bold text-amber-950">
-                          {fmt(prize.amount)} DOGE
-                        </div>
-                        <div className="text-sm text-amber-900/70">
-                          Ticket{" "}
-                          <b className="font-mono">
-                            #{pastWinningTickets?.[i]?.result?.toString() ?? "?"}
-                          </b>{" "}
-                          of {tickets.toString()} · won by{" "}
-                          <a className="font-mono text-amber-700 underline" href={`${explorer}/address/${winner}`} target="_blank" rel="noreferrer">
-                            {short(winner)}
-                          </a>{" "}
-                          · {prizeStatusLabel(prize.status, BigInt(prize.claimCutoff))}
-                        </div>
-                      </div>
-                    ) : (
-                      <div className="text-amber-900/60">
-                        {status === 2 ? "No tickets sold — rolled over" : "Drawing…"}
-                      </div>
-                    )}
-                  </li>
-                );
-              })}
-            </ul>
-          )}
-        </section>
-
         {/* ============================================================ FAQ */}
         <section className="pb-24 pt-24">
           <SectionHeading id="faq" kicker="FAQ" title="Questions" />
@@ -722,6 +551,29 @@ export default function Home() {
       </main>
 
       <SiteFooter />
+
+      <BuyModal
+        open={buyOpen}
+        onClose={() => setBuyOpen(false)}
+        bundles={bundles ?? []}
+        myTickets={myTickets ?? ZERO}
+        totalTickets={totalTickets}
+        isConnected={isConnected}
+        disabled={!deployed || busy}
+        onBuy={buy}
+        status={
+          txError ? (
+            <span className="text-red-700">{txError}</span>
+          ) : txHash ? (
+            <>
+              {txConfirming ? "Confirming… " : txConfirmed ? "Confirmed ✅ Good luck! " : ""}
+              <a className="font-semibold text-amber-700 underline" href={`${explorer}/tx/${txHash}`} target="_blank" rel="noreferrer">
+                view transaction
+              </a>
+            </>
+          ) : null
+        }
+      />
     </div>
   );
 }

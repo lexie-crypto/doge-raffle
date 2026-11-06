@@ -38,6 +38,16 @@ contract Deploy is Script {
         if (foundation == deployer) {
             console.log("WARNING: RAFFLE_FOUNDATION not set - foundation fee goes to deployer until setFoundationWallet()");
         }
+        if (owner == deployer) {
+            // 1 / 5 / 10 / 100 / 1000 tickets at 20 -> 15 DOGE per ticket
+            DogeRaffle.Bundle[] memory b = new DogeRaffle.Bundle[](5);
+            b[0] = DogeRaffle.Bundle({tickets: 1, price: 20 ether});
+            b[1] = DogeRaffle.Bundle({tickets: 5, price: 90 ether});
+            b[2] = DogeRaffle.Bundle({tickets: 10, price: 170 ether});
+            b[3] = DogeRaffle.Bundle({tickets: 100, price: 1_600 ether});
+            b[4] = DogeRaffle.Bundle({tickets: 1000, price: 15_000 ether});
+            raffle.setBundles(b);
+        }
         if (walletAdmin != address(0)) {
             raffle.setWalletAdmin(walletAdmin);
             console.log("walletAdmin:", walletAdmin);

@@ -6,6 +6,7 @@ import { useAccount, useReadContract, useReadContracts } from "wagmi";
 import { PrizeStatus, raffleAbi } from "@/lib/abi";
 import { RAFFLE_ADDRESS, dogeosChikyu } from "@/lib/chain";
 import { DogeCoin } from "./doge";
+import Link from "next/link";
 import { SectionHeading } from "./sections";
 
 const raffle = { address: RAFFLE_ADDRESS, abi: raffleAbi } as const;
@@ -135,7 +136,7 @@ export function MyTickets({
   if (!isConnected) {
     return (
       <div>
-        <SectionHeading kicker="Your account" title="My tickets" />
+        <SectionHeading kicker="Your tickets" title="Current & past tickets" />
         <div className="mx-auto flex max-w-xl flex-col items-center rounded-3xl border-2 border-dashed border-amber-300 bg-white/60 p-8 text-center">
           <DogeCoin size={64} className="bob" />
           <p className="display mt-3 text-xl font-bold text-amber-950">Connect your wallet to see your tickets</p>
@@ -150,15 +151,24 @@ export function MyTickets({
 
   return (
     <section className="relative z-10">
-      <SectionHeading kicker="Your account" title="My tickets" />
-      {tickets.length === 0 && (
-        <p className="text-center text-amber-900/70">
-          No tickets yet for{" "}
-          <span className="font-mono">
-            {address?.slice(0, 6)}…{address?.slice(-4)}
-          </span>
-          . Buy a bundle above to enter this round.
-        </p>
+      <SectionHeading kicker="Your tickets" title="Current & past tickets" />
+      {counts === undefined && (
+        <p className="text-center text-amber-900/60">Loading your tickets…</p>
+      )}
+      {counts !== undefined && tickets.length === 0 && (
+        <div className="mx-auto flex max-w-xl flex-col items-center rounded-3xl border-2 border-dashed border-amber-300 bg-white/60 p-8 text-center">
+          <DogeCoin size={64} className="bob" />
+          <p className="display mt-3 text-2xl font-bold text-amber-950">No tickets purchased yet</p>
+          <p className="mt-1 text-amber-900/70">
+            Get yours now — the next draw is on the 1st of the month.
+          </p>
+          <Link
+            href="/#buy"
+            className="doge-btn pulse-glow display mt-5 rounded-full bg-amber-500 px-7 py-3 text-lg font-bold text-white shadow-lg hover:bg-amber-400"
+          >
+            Get tickets
+          </Link>
+        </div>
       )}
       <ul className="mx-auto max-w-4xl space-y-3">
         {tickets.map((t, i) => {
