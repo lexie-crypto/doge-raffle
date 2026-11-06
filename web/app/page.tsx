@@ -1,6 +1,6 @@
 "use client";
 
-import { ConnectButton } from "@rainbow-me/rainbowkit";
+import { ConnectButton, useConnectModal } from "@rainbow-me/rainbowkit";
 import { useEffect, useMemo, useState } from "react";
 import { formatEther } from "viem";
 import {
@@ -12,7 +12,7 @@ import {
 } from "wagmi";
 import { PrizeStatus, raffleAbi } from "@/lib/abi";
 import { RAFFLE_ADDRESS, dogeosChikyu } from "@/lib/chain";
-import { DogeCoin, DogeOSBadge, ShibaFace } from "./doge";
+import { DogeCoin, DogeOSBadge } from "./doge";
 
 const raffle = { address: RAFFLE_ADDRESS, abi: raffleAbi } as const;
 
@@ -67,6 +67,7 @@ function useNowSec() {
 
 export default function Home() {
   const { address, isConnected } = useAccount();
+  const { openConnectModal } = useConnectModal();
   const nowSec = useNowSec();
   const { writeContract, data: txHash, isPending, error: txError } =
     useWriteContract();
@@ -217,10 +218,10 @@ export default function Home() {
 
   return (
     <main className="relative mx-auto max-w-3xl px-4 py-10">
-      <header className="relative z-10 mb-10 flex flex-wrap items-center justify-between gap-4">
-        <div className="flex items-center gap-4">
-          <div className="bob">
-            <ShibaFace size={88} />
+      <header className="relative z-10 mb-10 flex flex-col gap-4 sm:flex-row sm:items-center sm:justify-between">
+        <div className="flex min-w-0 items-center gap-4">
+          <div className="bob drop-shadow-lg">
+            <DogeCoin size={96} />
           </div>
           <div>
             <h1 className="display text-5xl font-bold tracking-tight text-amber-950">
@@ -232,7 +233,7 @@ export default function Home() {
             </p>
           </div>
         </div>
-        <div className="flex flex-col items-end gap-2">
+        <div className="flex shrink-0 flex-row items-center gap-2 sm:flex-col sm:items-end">
           <ConnectButton chainStatus="icon" showBalance={false} />
           <DogeOSBadge />
         </div>
@@ -281,9 +282,9 @@ export default function Home() {
       )}
 
       {/* Current round */}
-      <section className="relative z-10 mb-8 overflow-hidden rounded-3xl border-2 border-amber-200 bg-white p-6 shadow-xl shadow-amber-100">
-        <div className="absolute -right-5 -top-5 opacity-15">
-          <DogeCoin size={150} />
+      <section className="relative z-10 mb-8 overflow-hidden rounded-3xl border-2 border-amber-200 bg-white p-6 shadow-xl shadow-amber-100 sm:pr-56">
+        <div className="bob absolute right-6 top-1/2 hidden -translate-y-1/2 drop-shadow-xl sm:block">
+          <DogeCoin size={170} />
         </div>
         <div className="display mb-1 text-sm font-semibold uppercase tracking-wider text-amber-600">
           Round {roundId?.toString() ?? "…"} — current pot
@@ -354,16 +355,20 @@ export default function Home() {
             return (
               <button
                 key={i}
-                disabled={!isConnected || !deployed || isPending || txConfirming}
-                onClick={() =>
+                disabled={!deployed || isPending || txConfirming}
+                onClick={() => {
+                  if (!isConnected) {
+                    openConnectModal?.();
+                    return;
+                  }
                   writeContract({
                     ...raffle,
                     functionName: "buyTickets",
                     args: [BigInt(i)],
                     value: b.price,
                     chainId: dogeosChikyu.id,
-                  })
-                }
+                  });
+                }}
                 className="doge-btn rounded-2xl border-2 border-amber-200 bg-white p-5 text-left shadow-md shadow-amber-100 disabled:cursor-not-allowed disabled:opacity-40"
               >
                 <div className="display text-xs font-semibold uppercase tracking-wider text-amber-600">
@@ -387,7 +392,7 @@ export default function Home() {
         </div>
         {!isConnected && (
           <p className="mt-2 text-sm text-stone-500">
-            Connect a wallet to buy tickets.
+            Pick a bundle — you&apos;ll be asked to connect your wallet first.
           </p>
         )}
         {txHash && (
@@ -488,11 +493,10 @@ export default function Home() {
 
       <footer className="relative z-10 mt-12 border-t-2 border-amber-100 pt-6 text-xs leading-relaxed text-stone-400">
         <div className="mb-4 flex items-center justify-center gap-3">
-          <ShibaFace size={40} />
+          <DogeCoin size={40} />
           <span className="display text-base font-bold text-amber-700">
             Powered by DogeOS — the Dogecoin app layer
           </span>
-          <DogeCoin size={28} />
         </div>
         Winners claim their own prize (and pay gas) before a fixed deadline —
         unclaimed prizes roll into the next jackpot, where the protocol fee

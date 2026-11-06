@@ -82,6 +82,10 @@ Chain: id `6281971`, RPC `https://rpc.testnet.dogeos.com/`, explorer [dogeos-tes
 
 Then set repo Actions config for the backstop bot: variable `RAFFLE_ADDRESS`, secret `BOT_PRIVATE_KEY` (a throwaway hot wallet with a little testnet DOGE for gas), and update `NEXT_PUBLIC_RAFFLE_ADDRESS` for the web app.
 
+## Credits
+
+The Dogecoin logo (`web/public/dogecoin-logo*.png`, `web/app/icon.png`) is taken from the Dogecoin Core repository ([dogecoin/dogecoin](https://github.com/dogecoin/dogecoin), `src/qt/res/icons/dogecoin.png`, MIT license) and used to denote the DOGE currency. Dogecoin is a trademark of its respective owners; this project is not affiliated with or endorsed by the Dogecoin Foundation.
+
 ## Legal
 
 A paid-entry raffle is regulated gambling/lottery activity in most jurisdictions. This repository is a testnet technology demonstration; obtain legal advice before operating it for real value.
