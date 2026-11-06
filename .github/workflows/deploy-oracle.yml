@@ -72,7 +72,14 @@ jobs:
             ORACLE_PRIVATE_KEY="$BOT_PRIVATE_KEY"
 
       - name: Deploy (single always-on machine)
+        # Uses bot/fly.toml: no http_service, so any web service/port 8080
+        # health check created by Fly's launch UI is removed on deploy.
         run: flyctl deploy --app "$APP" --remote-only --ha=false
+
+      - name: Ensure exactly one machine
+        # Fly's launch UI creates 2 machines; two oracles would just race
+        # each other and double the cost.
+        run: flyctl scale count 1 --app "$APP" --yes
 
       - name: Show status
         run: flyctl status --app "$APP"
