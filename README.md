@@ -125,6 +125,10 @@ Then set the repo's Actions config (Settings → Secrets and variables → Actio
 
 The Dogecoin coin art (`web/public/dogecoin-coin.svg`, `web/app/icon.png`) is the official logo from the Dogecoin Core repository ([dogecoin/dogecoin](https://github.com/dogecoin/dogecoin), `share/pixmaps/dogecoin256.svg`, MIT license) with its white "D" overlay removed; the "wow" seal (`web/public/doge-wow-seal.png`) is cropped from the same repo's `src/qt/res/icons/paper_wallet.png` and used to denote the DOGE currency. Dogecoin is a trademark of its respective owners; this project is not affiliated with or endorsed by the Dogecoin Foundation.
 
+## License
+
+MIT — see [LICENSE](LICENSE). Vendored third-party code keeps its own license headers (Chainlink's VRF verifier and OpenZeppelin, both MIT). Open source doesn't mean open access: the VRF and bot keys live only in GitHub/Fly secrets, and the coordinator accepts proofs only from the registered oracle key.
+
 ## Legal
 
 A paid-entry raffle is regulated gambling/lottery activity in most jurisdictions. This repository is a testnet technology demonstration; obtain legal advice before operating it for real value.
