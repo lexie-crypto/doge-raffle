@@ -1,0 +1,78 @@
+name: deploy-oracle
+
+# Deploys the VRF oracle to Fly.io as an always-on worker.
+# One-time setup: add repo secret FLY_API_TOKEN (a Fly organization token).
+# Uses the existing secrets VRF_SECRET_KEY and BOT_PRIVATE_KEY and the
+# variable COORDINATOR_ADDRESS. Optional variable FLY_APP to rename the app.
+# Runs manually, and automatically when the oracle code changes.
+on:
+  workflow_dispatch: {}
+  push:
+    branches: [main]
+    paths:
+      - bot/ecvrf.mjs
+      - bot/vrf-oracle.mjs
+      - bot/package.json
+      - bot/package-lock.json
+      - bot/Dockerfile
+      - bot/fly.toml
+
+concurrency:
+  group: deploy-oracle
+  cancel-in-progress: false
+
+jobs:
+  deploy:
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    env:
+      FLY_API_TOKEN: ${{ secrets.FLY_API_TOKEN }}
+      APP: ${{ vars.FLY_APP || 'doge-raffle-vrf-oracle' }}
+    defaults:
+      run:
+        working-directory: bot
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Check configuration
+        env:
+          VRF_SECRET_KEY: ${{ secrets.VRF_SECRET_KEY }}
+          BOT_PRIVATE_KEY: ${{ secrets.BOT_PRIVATE_KEY }}
+          COORDINATOR_ADDRESS: ${{ vars.COORDINATOR_ADDRESS }}
+        run: |
+          missing=""
+          [ -n "$FLY_API_TOKEN" ] || missing="$missing secret:FLY_API_TOKEN"
+          [ -n "$VRF_SECRET_KEY" ] || missing="$missing secret:VRF_SECRET_KEY"
+          [ -n "$BOT_PRIVATE_KEY" ] || missing="$missing secret:BOT_PRIVATE_KEY"
+          [ -n "$COORDINATOR_ADDRESS" ] || missing="$missing variable:COORDINATOR_ADDRESS"
+          if [ -n "$missing" ]; then
+            echo "::error::Missing repo settings:$missing (Settings -> Secrets and variables -> Actions)"
+            exit 1
+          fi
+
+      - uses: superfly/flyctl-actions/setup-flyctl@master
+
+      - name: Create the Fly app if it doesn't exist
+        run: |
+          if flyctl status --app "$APP" >/dev/null 2>&1; then
+            echo "app $APP exists"
+          else
+            flyctl apps create "$APP"
+          fi
+
+      - name: Set oracle secrets on Fly
+        env:
+          VRF_SECRET_KEY: ${{ secrets.VRF_SECRET_KEY }}
+          BOT_PRIVATE_KEY: ${{ secrets.BOT_PRIVATE_KEY }}
+          COORDINATOR_ADDRESS: ${{ vars.COORDINATOR_ADDRESS }}
+        run: |
+          flyctl secrets set --app "$APP" --stage \
+            COORDINATOR_ADDRESS="$COORDINATOR_ADDRESS" \
+            VRF_SECRET_KEY="$VRF_SECRET_KEY" \
+            ORACLE_PRIVATE_KEY="$BOT_PRIVATE_KEY"
+
+      - name: Deploy (single always-on machine)
+        run: flyctl deploy --app "$APP" --remote-only --ha=false
+
+      - name: Show status
+        run: flyctl status --app "$APP"

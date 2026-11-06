@@ -56,7 +56,9 @@ cd bot && npm install
 COORDINATOR_ADDRESS=0x... VRF_SECRET_KEY=0x... ORACLE_PRIVATE_KEY=0x... node vrf-oracle.mjs --watch
 ```
 
-On an Ubuntu server (e.g. a Google Cloud e2-micro), `scripts/build-oracle-installer.sh` produces a single `install-doge-oracle.sh` that embeds the oracle (no git access needed), installs Node 22, prompts for the keys (stored root-only in `/etc/doge-oracle.env`), and runs it as a hardened systemd service that restarts on crash or reboot. Upload it and run `sudo bash install-doge-oracle.sh`; rerun a newer build to update (keys are kept). Logs: `sudo journalctl -u doge-oracle -f`.
+**Recommended: Fly.io (~$2/month, one always-on machine).** `bot/Dockerfile` + `bot/fly.toml` define the worker and `.github/workflows/deploy-oracle.yml` deploys it — no local tools needed. One-time: create a Fly account (card required), create an organization token in the Fly dashboard, save it as the repo secret `FLY_API_TOKEN`, then run the **deploy-oracle** workflow. It creates the app, copies `VRF_SECRET_KEY` / `BOT_PRIVATE_KEY` / `COORDINATOR_ADDRESS` into Fly secrets, and deploys; it redeploys automatically when the oracle code changes. Logs: Fly dashboard → app → Logs.
+
+Alternatively, on an Ubuntu server (e.g. a Google Cloud e2-micro), `scripts/build-oracle-installer.sh` produces a single `install-doge-oracle.sh` that embeds the oracle (no git access needed), installs Node 22, prompts for the keys (stored root-only in `/etc/doge-oracle.env`), and runs it as a hardened systemd service that restarts on crash or reboot. Upload it and run `sudo bash install-doge-oracle.sh`; rerun a newer build to update (keys are kept). Logs: `sudo journalctl -u doge-oracle -f`.
 
 Developer-facing docs live on the site at `/docs` (product page at `/vrf`). The code samples there are copied at build time from `contracts/src/examples/DiceRoller.sol` (tested end-to-end with real proofs in `contracts/test/DiceRoller.t.sol`) and `bot/examples/request-randomness.mjs` (run end-to-end on testnet), so they can't drift from tested code.
 
