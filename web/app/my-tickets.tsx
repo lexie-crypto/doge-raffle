@@ -38,10 +38,13 @@ export function MyTickets({
   nowSec,
   onClaim,
   busy,
+  onGetTickets,
 }: {
   nowSec: number | null;
   onClaim: (roundId: bigint) => void;
   busy: boolean;
+  /** Opens the ticket picker on the current page (falls back to a link). */
+  onGetTickets?: () => void;
 }) {
   const { address: liveAddress, isConnected: liveConnected } = useAccount();
   // same hydration guard as the page: no wallet-dependent output until mounted
@@ -162,12 +165,21 @@ export function MyTickets({
           <p className="mt-1 text-amber-900/70">
             Get yours now — the next draw is on the 1st of the month.
           </p>
-          <Link
-            href="/#buy"
-            className="doge-btn pulse-glow display mt-5 rounded-full bg-amber-500 px-7 py-3 text-lg font-bold text-white shadow-lg hover:bg-amber-400"
-          >
-            Get tickets
-          </Link>
+          {onGetTickets ? (
+            <button
+              onClick={onGetTickets}
+              className="doge-btn pulse-glow display mt-5 rounded-full bg-amber-500 px-7 py-3 text-lg font-bold text-white shadow-lg hover:bg-amber-400"
+            >
+              Get tickets
+            </button>
+          ) : (
+            <Link
+              href="/#buy"
+              className="doge-btn pulse-glow display mt-5 rounded-full bg-amber-500 px-7 py-3 text-lg font-bold text-white shadow-lg hover:bg-amber-400"
+            >
+              Get tickets
+            </Link>
+          )}
         </div>
       )}
       <ul className="mx-auto max-w-4xl space-y-3">

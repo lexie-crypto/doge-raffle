@@ -6,6 +6,7 @@ import { useAccount, useReadContract } from "wagmi";
 import { raffleAbi } from "@/lib/abi";
 import { RAFFLE_ADDRESS, dogeosChikyu } from "@/lib/chain";
 import { DogeCoin } from "../doge";
+import { GetTicketsModal } from "../get-tickets-modal";
 import { MyTickets } from "../my-tickets";
 import { PastDraws } from "../past-draws";
 import { SiteFooter, SiteNav } from "../site-chrome";
@@ -25,6 +26,7 @@ export default function MyTicketsPage() {
   const address = nowSec !== null ? liveAddress : undefined;
   const { write, txHash, isPending, error } = useSafeWrite();
   const [payoutRecipient, setPayoutRecipient] = useState("");
+  const [buyOpen, setBuyOpen] = useState(false);
 
   // Recipient-directed withdrawals only exist on raffle contracts deployed
   // with the fund-safety fix; keep the option hidden until the site points
@@ -63,6 +65,7 @@ export default function MyTicketsPage() {
             nowSec={nowSec}
             busy={isPending}
             onClaim={(id) => write({ ...raffle, functionName: "claimPrize", args: [id], chainId: dogeosChikyu.id })}
+            onGetTickets={() => setBuyOpen(true)}
           />
           {pendingPayout !== undefined && pendingPayout > BigInt(0) && (
             <div className="mx-auto mt-4 max-w-4xl rounded-2xl border-2 border-emerald-300 bg-emerald-50 p-5">
@@ -125,6 +128,7 @@ export default function MyTicketsPage() {
         </section>
       </main>
       <SiteFooter />
+      <GetTicketsModal open={buyOpen} onClose={() => setBuyOpen(false)} />
     </div>
   );
 }

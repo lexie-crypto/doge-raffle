@@ -4,7 +4,6 @@ import { useEffect, useMemo, useState } from "react";
 import { isAddress } from "viem";
 import {
   useAccount,
-  useConnect,
   useReadContract,
   useReadContracts,
   useWaitForTransactionReceipt,
@@ -12,9 +11,11 @@ import {
 import { PrizeStatus, raffleAbi } from "@/lib/abi";
 import { RAFFLE_ADDRESS, dogeosChikyu } from "@/lib/chain";
 import Link from "next/link";
-import { BundleCarousel, BuyModal } from "./bundles";
+import { BundleCarousel } from "./bundles";
 import { CoinRain, DogeCoin, DogeOSBadge, Rays, WowSeal } from "./doge";
-import { ensureDogeOs, useSafeWrite } from "./use-safe-write";
+import { GetTicketsModal } from "./get-tickets-modal";
+import { useBuyTickets } from "./use-buy-tickets";
+import { useSafeWrite } from "./use-safe-write";
 import { SiteFooter, SiteNav } from "./site-chrome";
 import {
   CountdownTiles,
@@ -75,7 +76,6 @@ const FACTS = [
 
 export default function Home() {
   const { address: liveAddress, isConnected: liveConnected } = useAccount();
-  const { connect, connectors } = useConnect();
   const nowSec = useNowSec();
   // Wallet state must not influence the first client render (it has to match
   // the server HTML); a wallet that auto-reconnects can otherwise flip
@@ -88,7 +88,8 @@ export default function Home() {
   const { isLoading: txConfirming, isSuccess: txConfirmed } = useWaitForTransactionReceipt({
     hash: txHash,
   });
-  const busy = isPending || txConfirming;
+  const busy = isPending || txConfirming; // claims
+  const purchase = useBuyTickets();
 
   const { data: roundId, refetch: refetchRoundId } = useReadContract({
     ...raffle,
@@ -226,35 +227,6 @@ export default function Home() {
   const deployed = RAFFLE_ADDRESS !== ZERO_ADDR;
 
   const [buyOpen, setBuyOpen] = useState(false);
-
-  function buy(bundleIndex: number, price: bigint) {
-    if (!isConnected) {
-      // one-click path for the common single-wallet case; the header
-      // button handles pickers and the no-wallet fallback
-      const c = connectors.find((x) => x.id !== "injected") ?? connectors[0];
-      if (c)
-        connect(
-          { connector: c, chainId: dogeosChikyu.id },
-          {
-            onSuccess: async () => {
-              try {
-                await ensureDogeOs((await c.getProvider()) as Parameters<typeof ensureDogeOs>[0]);
-              } catch {
-                /* declined: the purchase will ask again */
-              }
-            },
-          },
-        );
-      return;
-    }
-    writeContract({
-      ...raffle,
-      functionName: "buyTickets",
-      args: [BigInt(bundleIndex)],
-      value: price,
-      chainId: dogeosChikyu.id,
-    });
-  }
 
   return (
     <div className="relative overflow-x-hidden">
@@ -438,6 +410,15 @@ export default function Home() {
                 <p className="mt-2 text-xs text-amber-900/70">
                   Sent straight to your wallet — you pay a tiny network fee.
                 </p>
+                {txHash && (
+                  <p className="mt-2 text-sm">
+                    {txConfirming ? "Confirming… " : txConfirmed ? "Claimed ✅ " : ""}
+                    <a className="font-semibold text-amber-800 underline" href={`${explorer}/tx/${txHash}`} target="_blank" rel="noreferrer">
+                      view transaction
+                    </a>
+                  </p>
+                )}
+                {txError && <p className="mt-2 rounded-lg bg-red-50 p-2 text-sm text-red-700">{txError}</p>}
                 {supportsRedirect && <details className="mt-4 text-sm text-amber-950">
                   <summary className="cursor-pointer font-semibold underline">
                     Claim to another address
@@ -481,19 +462,19 @@ export default function Home() {
           <BundleCarousel
             bundles={bundles ?? []}
             isConnected={isConnected}
-            disabled={!deployed || busy}
-            onBuy={buy}
+            disabled={!deployed || purchase.busy}
+            onBuy={purchase.buy}
           />
-          {txHash && (
+          {purchase.txHash && (
             <p className="mt-5 text-center text-sm">
-              {txConfirming ? "Confirming… " : txConfirmed ? "Confirmed ✅ " : ""}
-              <a className="font-semibold text-amber-700 underline" href={`${explorer}/tx/${txHash}`} target="_blank" rel="noreferrer">
+              {purchase.confirming ? "Confirming… " : purchase.confirmed ? "Confirmed ✅ " : ""}
+              <a className="font-semibold text-amber-700 underline" href={`${explorer}/tx/${purchase.txHash}`} target="_blank" rel="noreferrer">
                 view transaction
               </a>
             </p>
           )}
-          {txError && (
-            <p className="mx-auto mt-5 max-w-xl rounded-xl bg-red-50 p-3 text-center text-sm text-red-700">{txError}</p>
+          {purchase.error && (
+            <p className="mx-auto mt-5 max-w-xl rounded-xl bg-red-50 p-3 text-center text-sm text-red-700">{purchase.error}</p>
           )}
         </section>
 
@@ -552,28 +533,7 @@ export default function Home() {
 
       <SiteFooter />
 
-      <BuyModal
-        open={buyOpen}
-        onClose={() => setBuyOpen(false)}
-        bundles={bundles ?? []}
-        myTickets={myTickets ?? ZERO}
-        totalTickets={totalTickets}
-        isConnected={isConnected}
-        disabled={!deployed || busy}
-        onBuy={buy}
-        status={
-          txError ? (
-            <span className="text-red-700">{txError}</span>
-          ) : txHash ? (
-            <>
-              {txConfirming ? "Confirming… " : txConfirmed ? "Confirmed ✅ Good luck! " : ""}
-              <a className="font-semibold text-amber-700 underline" href={`${explorer}/tx/${txHash}`} target="_blank" rel="noreferrer">
-                view transaction
-              </a>
-            </>
-          ) : null
-        }
-      />
+      <GetTicketsModal open={buyOpen} onClose={() => setBuyOpen(false)} />
     </div>
   );
 }
