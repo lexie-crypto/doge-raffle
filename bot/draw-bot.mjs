@@ -2,9 +2,13 @@
 //
 // The draw is permissionless (anyone can call commitDraw/finalizeDraw and
 // earn the bounty); this bot guarantees it happens on schedule even if nobody
-// else calls. GitHub Actions cron is best-effort, so eventual execution is
-// promised only while a funded bot (or any independent caller) submits
-// transactions. Run on a cron (see .github/workflows/draw-bot.yml).
+// else calls. Draws are on the 1st of each month at 00:00 UTC (fixed by the
+// contract), so the workflow fires exactly then (see
+// .github/workflows/draw-bot.yml). If GitHub starts the run a little early
+// (within WINDOW_HOURS of the deadline) it waits for the deadline; if the
+// draw is already done it exits in seconds. GitHub cron is best-effort, so
+// eventual execution is promised only while a funded bot (or any independent
+// caller) submits transactions.
 //
 // Env:
 //   RAFFLE_ADDRESS     - deployed DogeRaffle address
@@ -24,11 +28,12 @@ const RPC_URL = process.env.RPC_URL ?? "https://rpc.testnet.dogeos.com/";
 const RAFFLE_ADDRESS = process.env.RAFFLE_ADDRESS;
 const BOT_PRIVATE_KEY = process.env.BOT_PRIVATE_KEY;
 
-// Overall run budget: well under the workflow's timeout so a wedged RPC
-// never piles up concurrent runs.
-const RUN_DEADLINE_MS = 6 * 60 * 1000;
-const startedAt = Date.now();
-const timeLeft = () => RUN_DEADLINE_MS - (Date.now() - startedAt);
+// Cron window: if the round ends within this many hours, wait for it here.
+const WINDOW_HOURS = Number(process.env.WINDOW_HOURS ?? "1");
+// Work budget AFTER the deadline (commit -> randomness block -> finalize).
+const WORK_BUDGET_MS = 10 * 60 * 1000;
+let workStartedAt = Date.now();
+const timeLeft = () => WORK_BUDGET_MS - (Date.now() - workStartedAt);
 
 if (!RAFFLE_ADDRESS || !BOT_PRIVATE_KEY) {
   console.error("RAFFLE_ADDRESS and BOT_PRIVATE_KEY are required");
@@ -94,10 +99,29 @@ async function send(functionName, recheck) {
 async function roundState() {
   const id = await read("currentRoundId");
   const r = await read("rounds", [id]);
-  return { id, status: r[3], randomnessBlock: r[2] }; // tuple: start,end,randBlock,status,feeBps,foundationBps,tickets,pot,winner
+  // tuple: start,end,randBlock,status,feeBps,foundationBps,tickets,pot,winner
+  return { id, endTime: Number(r[1]), status: r[3], randomnessBlock: r[2] };
 }
 
 async function main() {
+  // Step 0: if nothing is pending, either exit now or sleep until the
+  // deadline if it lands inside this run's window.
+  const initial = await roundState();
+  if (initial.status === 0 /* Open */) {
+    const secondsLeft = initial.endTime - Math.floor(Date.now() / 1000);
+    if (secondsLeft > WINDOW_HOURS * 3600) {
+      console.log(
+        `round ${initial.id} ends in ${(secondsLeft / 3600).toFixed(1)}h — outside the ${WINDOW_HOURS}h window, nothing to do`,
+      );
+      return;
+    }
+    if (secondsLeft > 0) {
+      console.log(`round ${initial.id} ends in ${secondsLeft}s — waiting for the deadline`);
+      await sleep(secondsLeft * 1000 + 2_000); // +2s so block.timestamp is past endTime
+    }
+    workStartedAt = Date.now();
+  }
+
   // Step 1: commit if due (also settles expired prize / rolls empty rounds).
   if (await read("canCommit")) {
     const before = await roundState();

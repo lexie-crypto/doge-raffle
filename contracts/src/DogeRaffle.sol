@@ -13,8 +13,8 @@ interface IVRFCoordinator {
 /// @title DogeRaffle — recurring native-DOGE raffle for DogeOS
 ///       (claimable prizes + rolling jackpot model)
 ///
-/// Users buy tickets with native DOGE. Every `drawInterval` (default 30 days)
-/// a winner is drawn, weighted by tickets held. The prize is NOT pushed: it is
+/// Users buy tickets with native DOGE. On the 1st of every calendar month
+/// (00:00 UTC) a winner is drawn, weighted by tickets held. The prize is NOT pushed: it is
 /// escrowed and only the winner can claim it (paying their own gas), strictly
 /// before an immutable claim cutoff — the scheduled end of the next round,
 /// fixed the moment that round opens. An unclaimed prize is extinguished at
@@ -48,7 +48,7 @@ interface IVRFCoordinator {
 ///  - Late claims fail deterministically by timestamp even if no transaction
 ///    has settled the expiry yet; a claim before the cutoff and a rollover at
 ///    or after it can never both consume the same funds.
-///  - The owner can change prices/fee/interval for FUTURE rounds, but can
+///  - The owner can change prices/fees for FUTURE rounds, but can
 ///    never touch an active pot, an awarded claim, or anyone's withdrawable
 ///    balance, and can never shorten an existing claim window.
 contract DogeRaffle is Ownable2Step, Pausable, ReentrancyGuard, IVRFConsumer {
@@ -103,13 +103,11 @@ contract DogeRaffle is Ownable2Step, Pausable, ReentrancyGuard, IVRFConsumer {
 
     uint256 public constant MAX_FEE_BPS = 1000; // 10% hard cap, per fee
     uint256 public constant BPS = 10_000;
-    uint64 public constant MIN_DRAW_INTERVAL = 10 minutes;
     uint64 public constant RANDOMNESS_DELAY = 10; // blocks between commit and draw
 
     uint256 public feeBps = 500; // protocol 5% — applied to rounds opened after a change
     uint256 public foundationBps = 500; // Dogecoin Foundation 5% — likewise
     address public foundationWallet;
-    uint64 public drawInterval = 30 days;
     uint256 public callerBounty = 1 ether; // 1 DOGE, paid from the fee
     address public treasury;
 
@@ -118,6 +116,8 @@ contract DogeRaffle is Ownable2Step, Pausable, ReentrancyGuard, IVRFConsumer {
     mapping(uint256 => Prize) public prizes;
     mapping(uint256 => Entry[]) private _entries;
     mapping(uint256 => mapping(address => uint256)) public ticketsOf;
+    /// 0-indexed winning ticket number per finalized round (for audit/UI).
+    mapping(uint256 => uint256) public winningTicketOf;
 
     Bundle[] public bundles;
 
@@ -139,14 +139,22 @@ contract DogeRaffle is Ownable2Step, Pausable, ReentrancyGuard, IVRFConsumer {
 
     // --------------------------------------------------------------- events
 
+    /// `firstTicket` is the 0-indexed number of the first ticket in this
+    /// purchase; the buyer holds [firstTicket, firstTicket + tickets).
     event TicketsPurchased(
-        uint256 indexed roundId, address indexed buyer, uint256 bundleId, uint256 tickets, uint256 paid
+        uint256 indexed roundId,
+        address indexed buyer,
+        uint256 bundleId,
+        uint256 firstTicket,
+        uint256 tickets,
+        uint256 paid
     );
     event DrawCommitted(uint256 indexed roundId, uint64 randomnessBlock);
     event DrawRecommitted(uint256 indexed roundId, uint64 randomnessBlock);
     event WinnerDrawn(
         uint256 indexed roundId,
         address indexed winner,
+        uint256 winningTicket,
         uint256 prize,
         uint256 protocolFee,
         uint256 foundationFee,
@@ -166,7 +174,6 @@ contract DogeRaffle is Ownable2Step, Pausable, ReentrancyGuard, IVRFConsumer {
     event FeeBpsSet(uint256 feeBps);
     event FoundationBpsSet(uint256 foundationBps);
     event FoundationWalletSet(address foundationWallet);
-    event DrawIntervalSet(uint64 drawInterval);
     event CallerBountySet(uint256 bounty);
     event TreasurySet(address treasury);
     event VrfRequested(uint256 indexed roundId, uint256 indexed requestId);
@@ -184,7 +191,6 @@ contract DogeRaffle is Ownable2Step, Pausable, ReentrancyGuard, IVRFConsumer {
     error InvalidBundle();
     error NoBundles();
     error FeeTooHigh();
-    error IntervalTooShort();
     error ZeroAddress();
     error NothingToWithdraw();
     error DirectTransfersNotAccepted();
@@ -232,13 +238,14 @@ contract DogeRaffle is Ownable2Step, Pausable, ReentrancyGuard, IVRFConsumer {
         Bundle memory bundle = bundles[bundleId];
         if (msg.value != bundle.price) revert WrongPayment(bundle.price, msg.value);
 
-        uint96 newTotal = round.totalTickets + bundle.tickets;
+        uint96 firstTicket = round.totalTickets;
+        uint96 newTotal = firstTicket + bundle.tickets;
         round.totalTickets = newTotal;
         round.pot += msg.value;
         ticketsOf[currentRoundId][msg.sender] += bundle.tickets;
         _entries[currentRoundId].push(Entry({buyer: msg.sender, cumulative: newTotal}));
 
-        emit TicketsPurchased(currentRoundId, msg.sender, bundleId, bundle.tickets, msg.value);
+        emit TicketsPurchased(currentRoundId, msg.sender, bundleId, firstTicket, bundle.tickets, msg.value);
     }
 
     // ----------------------------------------------------------- draw flow
@@ -340,12 +347,15 @@ contract DogeRaffle is Ownable2Step, Pausable, ReentrancyGuard, IVRFConsumer {
 
         round.status = RoundStatus.Finalized;
         round.winner = winner;
+        winningTicketOf[roundId] = winningTicket;
         prizes[roundId] = Prize({amount: prizeAmount, claimCutoff: 0, status: PrizeStatus.Claimable});
 
-        emit WinnerDrawn(roundId, winner, prizeAmount, protocolFee, foundationFee, gross, totalTickets);
+        emit WinnerDrawn(
+            roundId, winner, winningTicket, prizeAmount, protocolFee, foundationFee, gross, totalTickets
+        );
 
         // Open the next round, then fix this prize's cutoff to its scheduled
-        // end — immutable from here on, whatever happens to drawInterval.
+        // end — immutable from here on.
         _startRound();
         uint64 cutoff = rounds[currentRoundId].endTime;
         prizes[roundId].claimCutoff = cutoff;
@@ -419,7 +429,7 @@ contract DogeRaffle is Ownable2Step, Pausable, ReentrancyGuard, IVRFConsumer {
         uint256 roundId = ++currentRoundId;
         Round storage round = rounds[roundId];
         round.startTime = uint64(block.timestamp);
-        round.endTime = uint64(block.timestamp) + drawInterval;
+        round.endTime = nextDrawTime(uint64(block.timestamp));
         round.status = RoundStatus.Open;
         // snapshot both fees: owner can't re-fee an active pot
         round.feeBps = uint16(feeBps);
@@ -478,14 +488,6 @@ contract DogeRaffle is Ownable2Step, Pausable, ReentrancyGuard, IVRFConsumer {
         emit FoundationWalletSet(newWallet);
     }
 
-    /// Applies to rounds STARTED after the current one ends. Never alters an
-    /// existing prize's claim cutoff (cutoffs are stored at award time).
-    function setDrawInterval(uint64 newInterval) external onlyOwner {
-        if (newInterval < MIN_DRAW_INTERVAL) revert IntervalTooShort();
-        drawInterval = newInterval;
-        emit DrawIntervalSet(newInterval);
-    }
-
     /// Set (or clear, with address(0)) the VRF coordinator. Takes effect at
     /// the next commit; a round already committed keeps the path it started
     /// with. The raffle must be fee-exempt on the coordinator.
@@ -522,6 +524,52 @@ contract DogeRaffle is Ownable2Step, Pausable, ReentrancyGuard, IVRFConsumer {
         _unpause();
     }
 
+    // ------------------------------------------------------ draw calendar
+
+    /// Draws happen on the 1st of every calendar month at 00:00 UTC. A round
+    /// opened at `ts` ends at the next such boundary strictly after `ts`, so
+    /// the schedule never drifts and a late draw self-heals onto the next
+    /// boundary. Uses the proleptic Gregorian civil-date algorithm
+    /// (Howard Hinnant), valid for any realistic timestamp.
+    function nextDrawTime(uint64 ts) public pure returns (uint64) {
+        (uint256 year, uint256 month) = _yearMonth(uint256(ts) / 1 days);
+        if (month == 12) {
+            year += 1;
+            month = 1;
+        } else {
+            month += 1;
+        }
+        return uint64(_daysFromCivil(year, month, 1) * 1 days);
+    }
+
+    /// days since 1970-01-01 -> (year, month)
+    function _yearMonth(uint256 days_) private pure returns (uint256 year, uint256 month) {
+        unchecked {
+            int256 z = int256(days_) + 719468;
+            int256 era = (z >= 0 ? z : z - 146096) / 146097;
+            uint256 doe = uint256(z - era * 146097); // [0, 146096]
+            uint256 yoe = (doe - doe / 1460 + doe / 36524 - doe / 146096) / 365; // [0, 399]
+            int256 y = int256(yoe) + era * 400;
+            uint256 doy = doe - (365 * yoe + yoe / 4 - yoe / 100); // [0, 365]
+            uint256 mp = (5 * doy + 2) / 153; // [0, 11]
+            month = mp < 10 ? mp + 3 : mp - 9; // [1, 12]
+            year = uint256(month <= 2 ? y + 1 : y);
+        }
+    }
+
+    /// (year, month, day) -> days since 1970-01-01
+    function _daysFromCivil(uint256 year, uint256 month, uint256 day) private pure returns (uint256) {
+        unchecked {
+            int256 y = int256(year) - (month <= 2 ? int256(1) : int256(0));
+            int256 era = (y >= 0 ? y : y - 399) / 400;
+            uint256 yoe = uint256(y - era * 400); // [0, 399]
+            uint256 mp = month > 2 ? month - 3 : month + 9; // [0, 11]
+            uint256 doy = (153 * mp + 2) / 5 + day - 1; // [0, 365]
+            uint256 doe = yoe * 365 + yoe / 4 - yoe / 100 + doy; // [0, 146096]
+            return uint256(era * 146097 + int256(doe) - 719468);
+        }
+    }
+
     // --------------------------------------------------------------- views
 
     function bundleCount() external view returns (uint256) {
@@ -534,6 +582,18 @@ contract DogeRaffle is Ownable2Step, Pausable, ReentrancyGuard, IVRFConsumer {
 
     function entryCount(uint256 roundId) external view returns (uint256) {
         return _entries[roundId].length;
+    }
+
+    /// Purchase `index` of a round: buyer and its ticket range [first, last].
+    function entryAt(uint256 roundId, uint256 index)
+        external
+        view
+        returns (address buyer, uint256 firstTicket, uint256 lastTicket)
+    {
+        Entry[] storage entries = _entries[roundId];
+        Entry storage e = entries[index];
+        uint256 first = index == 0 ? 0 : entries[index - 1].cumulative;
+        return (e.buyer, first, uint256(e.cumulative) - 1);
     }
 
     function canCommit() external view returns (bool) {

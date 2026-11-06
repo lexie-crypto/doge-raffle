@@ -13,6 +13,7 @@ import {
 import { PrizeStatus, raffleAbi } from "@/lib/abi";
 import { RAFFLE_ADDRESS, dogeosChikyu } from "@/lib/chain";
 import { DogeCoin, DogeOSBadge } from "./doge";
+import { MyTickets } from "./my-tickets";
 
 const raffle = { address: RAFFLE_ADDRESS, abi: raffleAbi } as const;
 
@@ -144,6 +145,15 @@ export default function Home() {
     query: { enabled: pastIds.length > 0 },
   });
 
+  const { data: pastWinningTickets } = useReadContracts({
+    contracts: pastIds.map((id) => ({
+      ...raffle,
+      functionName: "winningTicketOf" as const,
+      args: [id] as const,
+    })),
+    query: { enabled: pastIds.length > 0 },
+  });
+
   useEffect(() => {
     if (txConfirmed) {
       refetchRound();
@@ -232,7 +242,7 @@ export default function Home() {
               Doge Raffle
             </h1>
             <p className="font-medium text-amber-800/80">
-              A winner every 30 days · {winnerPct}% to the winner ·{" "}
+              Drawn on the 1st of every month · {winnerPct}% to the winner ·{" "}
               {Number(roundFoundationBps) / 100}% to the Dogecoin Foundation
               · verifiable on-chain draws
             </p>
@@ -421,6 +431,19 @@ export default function Home() {
         )}
       </section>
 
+      <MyTickets
+        nowSec={nowSec}
+        busy={isPending || txConfirming}
+        onClaim={(id) =>
+          writeContract({
+            ...raffle,
+            functionName: "claimPrize",
+            args: [id],
+            chainId: dogeosChikyu.id,
+          })
+        }
+      />
+
       {/* Failed treasury/bounty payout fallback (rare) */}
       {pendingPayout !== undefined && pendingPayout > ZERO && (
         <section className="relative z-10 mb-8 rounded-2xl border-2 border-emerald-300 bg-emerald-50 p-6">
@@ -446,7 +469,7 @@ export default function Home() {
       {/* Past rounds */}
       <section className="relative z-10">
         <h2 className="display mb-3 text-2xl font-bold text-amber-950">
-          Past winners
+          Past draws
         </h2>
         {pastIds.length === 0 && (
           <p className="text-sm text-stone-500">No completed rounds yet.</p>
@@ -477,8 +500,11 @@ export default function Home() {
                       {winner.slice(0, 6)}…{winner.slice(-4)}
                     </a>
                     <span className="text-amber-950">
-                      won {fmt(prize.amount)} DOGE ({tickets.toString()}{" "}
-                      tickets)
+                      won {fmt(prize.amount)} DOGE with ticket{" "}
+                      <span className="font-mono">
+                        #{pastWinningTickets?.[i]?.result?.toString() ?? "?"}
+                      </span>{" "}
+                      of {tickets.toString()}
                     </span>
                     <span className="text-stone-400">
                       {prizeStatusLabel(prize.status, BigInt(prize.claimCutoff))}

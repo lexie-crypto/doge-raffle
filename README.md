@@ -1,10 +1,10 @@
 # Doge Raffle 🐕
 
-A recurring native-DOGE raffle dApp for **DogeOS** (the EVM ZK-rollup app layer for Dogecoin). Users connect a wallet and buy tickets with DOGE; every 30 days a winner is drawn, weighted by tickets held. **Winners claim their own prize before a fixed deadline; unclaimed prizes roll into the next jackpot.**
+A recurring native-DOGE raffle dApp for **DogeOS** (the EVM ZK-rollup app layer for Dogecoin). Users connect a wallet and buy tickets with DOGE; on the 1st of every month (00:00 UTC) a winner is drawn, weighted by tickets held. **Winners claim their own prize before a fixed deadline; unclaimed prizes roll into the next jackpot.**
 
 > **Live on Chikyū testnet:**
-> - DogeRaffle: [`0x96F691cd241e630dEdabC2BE84412B6d195D9dD7`](https://dogeos-testnet.l2scan.co/address/0x96F691cd241e630dEdabC2BE84412B6d195D9dD7)
-> - DogeVRFCoordinator: [`0x613a9590b1b194134f4e4ed93aed7aF3B1d67470`](https://dogeos-testnet.l2scan.co/address/0x613a9590b1b194134f4e4ed93aed7aF3B1d67470)
+> - DogeRaffle: [`0x6d1d86d95Ae63ec170cd73D33e3BE710a4FBE0aa`](https://dogeos-testnet.l2scan.co/address/0x6d1d86d95Ae63ec170cd73D33e3BE710a4FBE0aa)
+> - DogeVRFCoordinator: [`0xc8F4eB8E4ABbC34B6E097582D14806767457B9c9`](https://dogeos-testnet.l2scan.co/address/0xc8F4eB8E4ABbC34B6E097582D14806767457B9c9)
 
 > **Status: DogeOS Chikyū testnet only.** DogeOS mainnet has not launched; when it does, deployment is a config change (new RPC/chain id). **Real-value launch is additionally blocked on the randomness trust model below.**
 
@@ -13,17 +13,17 @@ A recurring native-DOGE raffle dApp for **DogeOS** (the EVM ZK-rollup app layer 
 | Path | What |
 |---|---|
 | `contracts/` | Foundry project: `DogeRaffle.sol`, tests, deploy script |
-| `web/` | Next.js frontend (wagmi + viem + RainbowKit) |
+| `web/` | Next.js frontend (wagmi + viem + RainbowKit — any EVM wallet: browser-injected, WalletConnect, Coinbase Wallet). Wallet = account: a "My tickets" dashboard shows ticket numbers, past rounds, each draw's winning ticket and your result, read directly from the contract via Multicall3. |
 | `bot/` | Draw-keeper cron bot + GitHub Actions workflow |
 
 ## How it works
 
-1. **Buy tickets** — `buyTickets(bundleId)` with the exact DOGE value. Default bundles (owner-configurable via `setBundles`): 1 ticket = 20 DOGE, 5 = 90, 10 = 170. Tickets are stored as cumulative ranges, so a 10,000-ticket purchase costs the same gas/storage as 1.
-2. **Draw, every 30 days, permissionless** — DogeOS has no keeper network, so instead of a privileged cron, *anyone* can trigger the draw once the round ends and earn a 1 DOGE bounty (paid from the fee, never from the prize):
-   - `commitDraw()` settles the prior round's expired prize into the jackpot (exactly once), closes sales, and pins a block ~10 blocks ahead;
-   - `finalizeDraw()` derives the winning ticket from that block's hash, **escrows** the prize as a claim, pays the treasury (protocol fee − bounty), the Dogecoin Foundation wallet (foundation fee) and the caller (bounty), then opens the next round.
-   - The `bot/` cron is a backstop that calls these if nobody else does. GitHub cron is best-effort; eventual execution is guaranteed only while a funded bot or any independent caller submits transactions.
-3. **Winner claims, and pays gas** — the prize is never pushed. `claimPrize(roundId)` is winner-only, one-time, and valid **strictly before the claim cutoff**: the next round's scheduled end time, fixed the moment that round opens. Admin changes (e.g. `setDrawInterval`) can never move an existing cutoff. A claim whose transfer fails reverts — the claim is never burned.
+1. **Buy tickets** — `buyTickets(bundleId)` with the exact DOGE value. Default bundles (owner-configurable via `setBundles`): 1 ticket = 20 DOGE, 5 = 90, 10 = 170. Tickets are numbered 0…N−1 per round and stored as cumulative ranges, so a 10,000-ticket purchase costs the same gas/storage as 1. Every purchase emits `TicketsPurchased(round, buyer, bundle, firstTicket, tickets, paid)`, and `entryAt(round, i)` exposes each purchase's buyer and ticket range, so anyone can audit who held which numbers.
+2. **Draw on the 1st of every month, permissionless** — DogeOS has no keeper network, so instead of a privileged cron, *anyone* can trigger the draw once the round ends and earn a 1 DOGE bounty (paid from the fee, never from the prize):
+   - `commitDraw()` settles the prior round's expired prize into the jackpot (exactly once), closes sales, and pins a block ~10 blocks ahead; a late draw self-heals — the next round still ends on the following 1st;
+   - `finalizeDraw()` derives the winning ticket number (randomness mod total tickets; stored in `winningTicketOf(round)` and emitted in `WinnerDrawn`), **escrows** the prize as a claim, pays the treasury (protocol fee − bounty), the Dogecoin Foundation wallet (foundation fee) and the caller (bounty), then opens the next round.
+   - The `bot/` workflow is a backstop that calls these if nobody else does. Because draws are calendar-fixed (1st of the month, 00:00 UTC), it runs exactly twice a month: once at the draw and a backup six hours later that exits in seconds if the draw already happened. GitHub cron is best-effort; eventual execution is guaranteed only while a funded bot or any independent caller submits transactions.
+3. **Winner claims, and pays gas** — the prize is never pushed. `claimPrize(roundId)` is winner-only, one-time, and valid **strictly before the claim cutoff**: the next round's scheduled end time, fixed the moment that round opens. The schedule is fixed in code (next calendar-month boundary), so nothing can move an existing cutoff. A claim whose transfer fails reverts — the claim is never burned.
 4. **Unclaimed prizes roll** — at the next round's commit, an expired prize is extinguished and added to that round's gross pot, exactly once. Previously claimed amounts never roll. If a round has no tickets, no winner is drawn, no fee is charged, and the carried jackpot survives (through any number of empty rounds) until a ticketed draw happens.
 5. **Fees — 5% protocol, 5% Dogecoin Foundation, 90% winner** — each round snapshots both `feeBps` (protocol treasury) and `foundationBps` (Dogecoin Foundation wallet, set via `setFoundationWallet`) when it opens, so the owner cannot re-fee an active pot. Each is hard-capped at 10%. Both apply to the **full gross pot — new ticket revenue plus rollover** (rolled funds are deliberately charged again); the finalizer bounty comes out of the protocol fee only. Exact example:
 

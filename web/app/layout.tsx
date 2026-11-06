@@ -12,7 +12,7 @@ const fredoka = Fredoka({
 export const metadata: Metadata = {
   title: "Doge Raffle",
   description:
-    "Monthly DOGE raffle on DogeOS — buy tickets, a winner is drawn every 30 days.",
+    "Monthly DOGE raffle on DogeOS — buy tickets, a winner is drawn on the 1st of every month.",
 };
 
 export default function RootLayout({

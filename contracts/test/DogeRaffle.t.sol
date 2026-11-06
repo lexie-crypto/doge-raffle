@@ -501,19 +501,37 @@ contract DogeRaffleTest is Test {
         assertEq(foundation.balance, 0);
     }
 
-    function test_intervalChangeNeverMovesExistingCutoff() public {
-        _buySingles(alice, 1);
-        uint256 r1 = _draw();
-        uint64 cutoffBefore = raffle.prizeOf(r1).claimCutoff;
+    function test_cutoffIsNextMonthBoundary_andImmutable() public {
+        // 2026-11-06 12:00 UTC -> round 1 ends 2026-12-01 00:00 UTC
+        vm.warp(1_762_430_400);
+        DogeRaffle fresh = new DogeRaffle(owner, treasury, foundation);
+        (, uint64 endTime,,,,,,,) = fresh.rounds(1);
+        assertEq(endTime, 1_764_547_200, "Dec 1 2026 00:00 UTC");
 
-        vm.prank(owner);
-        raffle.setDrawInterval(10 minutes);
-        assertEq(raffle.prizeOf(r1).claimCutoff, cutoffBefore, "cutoff immutable");
-
-        // claim still valid right up to the original cutoff
-        vm.warp(cutoffBefore - 1);
+        // late draw on Dec 3 -> next round still ends Jan 1, cutoff = Jan 1
         vm.prank(alice);
-        raffle.claimPrize(r1);
+        fresh.buyTickets{value: 20 ether}(SINGLE);
+        vm.warp(1_764_547_200 + 2 days);
+        fresh.commitDraw();
+        (,, uint64 rb,,,,,,) = fresh.rounds(1);
+        vm.roll(uint256(rb) + 1);
+        fresh.finalizeDraw();
+        assertEq(fresh.prizeOf(1).claimCutoff, 1_767_225_600, "Jan 1 2027 00:00 UTC");
+        (, uint64 end2,,,,,,,) = fresh.rounds(2);
+        assertEq(end2, 1_767_225_600);
+
+        // claim valid right up to the boundary, dead at it
+        vm.warp(1_767_225_600 - 1);
+        vm.prank(alice);
+        fresh.claimPrize(1);
+    }
+
+    function test_nextDrawTime_knownDates() public view {
+        assertEq(raffle.nextDrawTime(1_767_225_599), 1_767_225_600, "Dec 31 23:59:59 -> Jan 1");
+        assertEq(raffle.nextDrawTime(1_767_225_600), 1_769_904_000, "exactly Jan 1 -> Feb 1 2027");
+        assertEq(raffle.nextDrawTime(1_772_323_200 - 1), 1_772_323_200, "Feb 28 2027 -> Mar 1");
+        assertEq(raffle.nextDrawTime(1_709_164_800), 1_709_251_200, "Feb 28 2024 (leap) -> Mar 1 2024");
+        assertEq(raffle.nextDrawTime(0), 2_678_400, "epoch -> Feb 1 1970");
     }
 
     function test_feeCapEnforced() public {
@@ -778,6 +796,47 @@ contract DogeRaffleTest is Test {
         raffle.finalizeDraw();
 
         assertEq(_round(1).winner, expected, "binary search maps ticket to correct owner");
+    }
+
+    // ------------------------------------------------- ticket numbering / audit
+
+    function test_ticketNumbersAndWinningTicketAreAuditable() public {
+        // alice: #0, bob: #1..#10, alice: #11..#15
+        vm.expectEmit(true, true, false, true);
+        emit DogeRaffle.TicketsPurchased(1, alice, SINGLE, 0, 1, 20 ether);
+        vm.prank(alice);
+        raffle.buyTickets{value: 20 ether}(SINGLE);
+
+        vm.expectEmit(true, true, false, true);
+        emit DogeRaffle.TicketsPurchased(1, bob, TEN, 1, 10, 170 ether);
+        vm.prank(bob);
+        raffle.buyTickets{value: 170 ether}(TEN);
+
+        vm.prank(alice);
+        raffle.buyTickets{value: 90 ether}(FIVE);
+
+        (address b0, uint256 f0, uint256 l0) = raffle.entryAt(1, 0);
+        (address b1, uint256 f1, uint256 l1) = raffle.entryAt(1, 1);
+        (address b2, uint256 f2, uint256 l2) = raffle.entryAt(1, 2);
+        assertEq(b0, alice); assertEq(f0, 0); assertEq(l0, 0);
+        assertEq(b1, bob); assertEq(f1, 1); assertEq(l1, 10);
+        assertEq(b2, alice); assertEq(f2, 11); assertEq(l2, 15);
+
+        // force the draw onto ticket #7 and check it is recorded + bob wins
+        _endRound();
+        raffle.commitDraw();
+        uint64 rb = _round(1).randomnessBlock;
+        vm.roll(uint256(rb) + 1);
+        bytes32 seedHash; uint256 nonce;
+        while (true) {
+            seedHash = keccak256(abi.encode("audit", nonce));
+            if (uint256(keccak256(abi.encodePacked(seedHash, uint256(1), uint96(16), address(raffle)))) % 16 == 7) break;
+            nonce++;
+        }
+        vm.setBlockhash(rb, seedHash);
+        raffle.finalizeDraw();
+        assertEq(raffle.winningTicketOf(1), 7);
+        assertEq(_round(1).winner, bob);
     }
 
     function test_withdrawRevertsWithNothingPending() public {

@@ -11,6 +11,11 @@ export const dogeosChikyu = defineChain({
   blockExplorers: {
     default: { name: "L2Scan", url: "https://dogeos-testnet.l2scan.co" },
   },
+  contracts: {
+    // Multicall3 is deployed at the canonical address on DogeOS; lets wagmi
+    // batch many reads into one RPC call.
+    multicall3: { address: "0xcA11bde05977b3631167028862bE2a173976CA11" },
+  },
   testnet: true,
 });
 

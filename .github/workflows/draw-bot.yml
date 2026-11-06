@@ -1,8 +1,13 @@
 name: draw-bot
 
+# Draws happen on the 1st of every month at 00:00 UTC (fixed in the contract),
+# so this wakes up exactly then and fires. The 06:00 run is a backup in case
+# GitHub delays or skips the first one (it exits in seconds if the draw is
+# already done). Two runs a month, total.
 on:
   schedule:
-    - cron: "*/15 * * * *" # every 15 minutes
+    - cron: "0 0 1 * *" # 1st of the month, 00:00 UTC — the draw
+    - cron: "0 6 1 * *" # backup, same day
   workflow_dispatch: {}
 
 concurrency:
@@ -12,7 +17,7 @@ concurrency:
 jobs:
   draw:
     runs-on: ubuntu-latest
-    timeout-minutes: 10
+    timeout-minutes: 30
     steps:
       - uses: actions/checkout@v4
       - uses: actions/setup-node@v4
@@ -25,6 +30,7 @@ jobs:
         env:
           RAFFLE_ADDRESS: ${{ vars.RAFFLE_ADDRESS }}
           BOT_PRIVATE_KEY: ${{ secrets.BOT_PRIVATE_KEY }}
+          WINDOW_HOURS: "1" # if cron fires a little early, wait for 00:00
       # VRF oracle responder: proves and fulfills pending randomness requests.
       # Runs after the draw step so a commitDraw lands in the same pass.
       - run: node vrf-oracle.mjs
