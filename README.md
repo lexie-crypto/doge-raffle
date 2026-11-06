@@ -3,10 +3,11 @@
 A recurring DOGE raffle dApp on **DogeOS** (the EVM ZK-rollup app layer for Dogecoin). Users connect a wallet and buy tickets with DOGE; on the 1st of every month (00:00 UTC) a winner is drawn, weighted by tickets held. **Winners claim their own prize before a fixed deadline; unclaimed prizes roll into the next jackpot.**
 
 > **Live on Chikyū testnet:**
-> - DogeRaffle: [`0x0B0024090b1a2BD99128654E0047BB27fE30D05C`](https://dogeos-testnet.l2scan.co/address/0x0B0024090b1a2BD99128654E0047BB27fE30D05C)
+> - DogeRaffle (active legacy): [`0x0B0024090b1a2BD99128654E0047BB27fE30D05C`](https://dogeos-testnet.l2scan.co/address/0x0B0024090b1a2BD99128654E0047BB27fE30D05C)
+> - DogeRaffle v2 (deployed, sales paused): [`0x5665F2A606E548306e38d98a05335845F05Ec70b`](https://dogeos-testnet.l2scan.co/address/0x5665F2A606E548306e38d98a05335845F05Ec70b)
 > - DogeVRFCoordinator: [`0x4463AF4EAccFFB4AC14e87e9dac09B59e9E3614c`](https://dogeos-testnet.l2scan.co/address/0x4463AF4EAccFFB4AC14e87e9dac09B59e9E3614c)
 
-> **Deployment note:** Source changes do not alter these immutable testnet contracts. Redeploy and update the site, bot, and workflow addresses before treating the fixes below as live. Let existing claims settle before migrating.
+> **Deployment note:** The fixed v2 contract is staged but not active. The site and draw bot still use the funded legacy raffle. Keep its draw and claim path available until the current round and claims settle; then verify both contracts, update the site and bot addresses, and unpause v2. The old contract is immutable and cannot be patched in place.
 
 > **Status: DogeOS Chikyū testnet only.** DogeOS mainnet has not launched; when it does, deployment is a config change (new RPC/chain id). **Real-value launch is additionally blocked on the randomness trust model below.**
 
