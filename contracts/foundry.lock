@@ -4,5 +4,11 @@
       "name": "v5.7.0",
       "rev": "cab19933c33c2ad1d4c7a84864a3601dddfd16f3"
     }
+  },
+  "lib/vrf-solidity": {
+    "tag": {
+      "name": "0.2.1",
+      "rev": "ea2e2ab72eb1e527d484318eda38fd686503c309"
+    }
   }
 }

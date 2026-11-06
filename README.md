@@ -35,9 +35,16 @@ A recurring native-DOGE raffle dApp for **DogeOS** (the EVM ZK-rollup app layer 
 
 6. **Fail-closed** — `pause()` stops ticket **sales only**; draws, claims and withdrawals can never be paused. Failed treasury/bounty pushes credit a pull-based `withdrawable` balance. The owner can never sweep the pot, an awarded claim, or anyone's balance. Value conservation (every wei of tickets = claims + rollover + fee + bounty) is enforced by tests at wei precision.
 
-### Randomness: trust model — launch blocker (read this)
+### Randomness: self-operated VRF with blockhash fallback
 
-DogeOS has **no VRF oracle** (Chainlink VRF does not support DogeOS), and **`PREVRANDAO` returns 0 on DogeOS**, so the draw seeds from the hash of a block pinned *after* ticket sales close (commit → finalize). Buyers cannot predict or influence the outcome. **However:** the 256-block hash-retrieval window plus permissionless late recommit make liveness fragile and may allow selective timing/abort bias, and the rollup's sequencer can in principle influence block hashes. Solidity's own docs warn against block hashes as secure randomness. **This is not a verified fair-money lottery today.** Real-value launch stays blocked until the randomness is replaced with an independently verifiable scheme (a VRF service on DogeOS is planned as a follow-up) and jurisdictional/legal clearance is in place. If the pinned block ages past the hash window before anyone finalizes, the commitment automatically re-pins — the draw can never strand.
+Chainlink VRF does not support DogeOS, so this repo ships its own VRF service — the first randomness infrastructure on the chain:
+
+- **`contracts/src/vrf/DogeVRFCoordinator.sol`** — Chainlink-style request/fulfill coordinator. Proofs are verified **on-chain** against the registered oracle public key using Chainlink's MIT-licensed secp256k1 ECVRF verifier (vendored unmodified at `contracts/src/vrf/vendor/VRF.sol`, from `smartcontractkit/chainlink` tag `contracts-v1.3.0`). Neither the oracle nor the sequencer can forge or bias an output; anyone can re-verify every fulfillment.
+- **`bot/ecvrf.mjs`** — the off-chain prover (mirrors the verifier byte-for-byte; proven compatible by Foundry ffi tests that verify JS-generated proofs on-chain). **`bot/vrf-oracle.mjs`** scans for requests and fulfills them on the draw-bot cron.
+- **Raffle integration** — `commitDraw()` requests randomness (the raffle is fee-exempt); the coordinator's verified callback settles the draw. If the oracle stays silent past `vrfTimeout` (default 6h), the permissionless **blockhash fallback** settles instead — so a withholding oracle can delay a draw but never abort or redirect it, and the delay is publicly visible on-chain. With no coordinator set the blockhash path runs alone (bootstrap mode; `PREVRANDAO` returns 0 on DogeOS, hence commit + future-blockhash).
+- **Monetization** — the coordinator charges a per-request fee in native DOGE (default 2 DOGE, owner-settable) to any third-party DogeOS dApp that wants verifiable randomness; fees accrue to the owner. House consumers are whitelisted fee-exempt.
+
+**Residual trust, stated plainly:** VRF outputs are unforgeable, but the key holder sees an output before posting and could *withhold* it, steering the round to the (also unpredictable) blockhash fallback; the fallback itself carries sequencer-influence and timing caveats. This is a major upgrade over blockhash-only, but **real-value launch still requires a reviewed randomness design** (e.g. key management, fallback policy) **and legal clearance.** Keep the VRF secret key offline-backed and separate from the gas wallet.
 
 ## Development
 
