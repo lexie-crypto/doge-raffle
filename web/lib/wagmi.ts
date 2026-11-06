@@ -7,8 +7,9 @@ import { dogeosChikyu } from "./chain";
 export const wagmiConfig = getDefaultConfig({
   appName: "Doge Raffle",
   // WalletConnect Cloud project id — set a real one in .env for production.
+  // "||" (not "??") so an empty env value still gets the dev fallback.
   projectId:
-    process.env.NEXT_PUBLIC_WALLETCONNECT_PROJECT_ID ?? "doge-raffle-dev",
+    process.env.NEXT_PUBLIC_WALLETCONNECT_PROJECT_ID || "doge-raffle-dev",
   chains: [dogeosChikyu],
   transports: { [dogeosChikyu.id]: http() },
   ssr: true,
