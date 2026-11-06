@@ -6,6 +6,9 @@ solc_version = "0.8.31"
 evm_version = "osaka"
 optimizer = true
 optimizer_runs = 2000
+# ffi is used by the VRF tests to generate real ECVRF proofs with the
+# off-chain prover (bot/ecvrf-cli.mjs) and verify them on-chain.
+ffi = true
 
 remappings = [
     "@openzeppelin/=lib/openzeppelin-contracts/",

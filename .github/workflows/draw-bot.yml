@@ -25,3 +25,12 @@ jobs:
         env:
           RAFFLE_ADDRESS: ${{ vars.RAFFLE_ADDRESS }}
           BOT_PRIVATE_KEY: ${{ secrets.BOT_PRIVATE_KEY }}
+      # VRF oracle responder: proves and fulfills pending randomness requests.
+      # Runs after the draw step so a commitDraw lands in the same pass.
+      - run: node vrf-oracle.mjs
+        if: ${{ vars.COORDINATOR_ADDRESS != '' }}
+        working-directory: bot
+        env:
+          COORDINATOR_ADDRESS: ${{ vars.COORDINATOR_ADDRESS }}
+          VRF_SECRET_KEY: ${{ secrets.VRF_SECRET_KEY }}
+          ORACLE_PRIVATE_KEY: ${{ secrets.BOT_PRIVATE_KEY }}

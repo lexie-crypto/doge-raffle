@@ -4,6 +4,11 @@ pragma solidity ^0.8.31;
 import {Ownable2Step, Ownable} from "@openzeppelin/contracts/access/Ownable2Step.sol";
 import {Pausable} from "@openzeppelin/contracts/utils/Pausable.sol";
 import {ReentrancyGuard} from "@openzeppelin/contracts/utils/ReentrancyGuard.sol";
+import {IVRFConsumer} from "./vrf/IVRFConsumer.sol";
+
+interface IVRFCoordinator {
+    function requestRandomness(bytes32 userSeed) external payable returns (uint256 requestId);
+}
 
 /// @title DogeRaffle — recurring native-DOGE raffle for DogeOS
 ///       (claimable prizes + rolling jackpot model)
@@ -22,13 +27,14 @@ import {ReentrancyGuard} from "@openzeppelin/contracts/utils/ReentrancyGuard.sol
 /// the draw, so the draw is permissionless and needs no privileged keeper.
 /// Rounds with no tickets charge no fee and carry any rolled jackpot forward.
 ///
-/// Randomness: DogeOS has no VRF oracle today, and PREVRANDAO returns 0 on
-/// DogeOS, so randomness is derived from the hash of a block chosen AFTER
-/// ticket sales close (two-step commit/finalize). This prevents buyers from
-/// predicting the outcome. Residual trust assumption: the chain's sequencer
-/// could in principle influence block hashes, and a permissionless finalize
-/// can be timed. NOT fit for real-value launch as-is; the derivation is
-/// isolated so a VRF can replace it.
+/// Randomness: primary source is DogeVRFCoordinator (on-chain-verified ECVRF
+/// — unforgeable by oracle and sequencer alike). commitDraw requests a VRF
+/// output; the coordinator's verified callback settles the draw. If the
+/// oracle stays silent past `vrfTimeout`, the permissionless blockhash path
+/// (commit + future blockhash, since PREVRANDAO returns 0 on DogeOS) settles
+/// instead, so a withholding oracle can delay a draw but never abort it —
+/// and the delay is publicly visible on-chain. With no coordinator set, the
+/// blockhash path runs alone (testnet bootstrap mode; not fit for real value).
 ///
 /// Fail-closed guarantees:
 ///  - pause() stops ticket SALES only; draws, claims and withdrawals can
@@ -42,7 +48,7 @@ import {ReentrancyGuard} from "@openzeppelin/contracts/utils/ReentrancyGuard.sol
 ///  - The owner can change prices/fee/interval for FUTURE rounds, but can
 ///    never touch an active pot, an awarded claim, or anyone's withdrawable
 ///    balance, and can never shorten an existing claim window.
-contract DogeRaffle is Ownable2Step, Pausable, ReentrancyGuard {
+contract DogeRaffle is Ownable2Step, Pausable, ReentrancyGuard, IVRFConsumer {
     // ---------------------------------------------------------------- types
 
     enum RoundStatus {
@@ -118,6 +124,13 @@ contract DogeRaffle is Ownable2Step, Pausable, ReentrancyGuard {
     /// {prizes} with a deadline and are claimed via {claimPrize}.
     mapping(address => uint256) public withdrawable;
 
+    /// VRF integration (optional: zero coordinator = blockhash-only mode).
+    address public vrfCoordinator;
+    uint64 public vrfTimeout = 6 hours; // fallback delay before blockhash settles
+    mapping(uint256 => uint256) public vrfRequestOf; // roundId => requestId
+    mapping(uint256 => uint256) public roundOfRequest; // requestId => roundId
+    mapping(uint256 => uint64) public committedAt; // roundId => commit timestamp
+
     // --------------------------------------------------------------- events
 
     event TicketsPurchased(
@@ -145,6 +158,9 @@ contract DogeRaffle is Ownable2Step, Pausable, ReentrancyGuard {
     event DrawIntervalSet(uint64 drawInterval);
     event CallerBountySet(uint256 bounty);
     event TreasurySet(address treasury);
+    event VrfRequested(uint256 indexed roundId, uint256 indexed requestId);
+    event VrfCoordinatorSet(address coordinator);
+    event VrfTimeoutSet(uint64 timeout);
 
     // --------------------------------------------------------------- errors
 
@@ -165,6 +181,10 @@ contract DogeRaffle is Ownable2Step, Pausable, ReentrancyGuard {
     error PrizeNotClaimable();
     error ClaimExpired();
     error ClaimTransferFailed();
+    error OnlyCoordinator();
+    error StaleVrfResponse();
+    error VrfStillPending();
+    error TimeoutTooShort();
 
     // ---------------------------------------------------------- constructor
 
@@ -235,19 +255,43 @@ contract DogeRaffle is Ownable2Step, Pausable, ReentrancyGuard {
         }
 
         round.status = RoundStatus.Committed;
-        round.randomnessBlock = uint64(block.number) + RANDOMNESS_DELAY;
+        round.randomnessBlock = uint64(block.number) + RANDOMNESS_DELAY; // fallback pin
+        committedAt[roundId] = uint64(block.timestamp);
         emit DrawCommitted(roundId, round.randomnessBlock);
+
+        // Primary path: request verified randomness (raffle is fee-exempt).
+        if (vrfCoordinator != address(0)) {
+            uint256 requestId = IVRFCoordinator(vrfCoordinator).requestRandomness(bytes32(roundId));
+            vrfRequestOf[roundId] = requestId;
+            roundOfRequest[requestId] = roundId;
+            emit VrfRequested(roundId, requestId);
+        }
     }
 
-    /// Step 2: draw the winner using the pinned block's hash. Permissionless;
-    /// the caller earns `callerBounty` (paid from the fee). The prize is
-    /// ESCROWED as a claim, never pushed. If the pinned block has aged out of
-    /// the 256-block hash window, the commitment is re-pinned instead of
+    /// Coordinator callback: settle the draw with the verified VRF output.
+    /// No bounty on this path — the oracle is compensated by the protocol.
+    function rawFulfillRandomness(uint256 requestId, uint256 randomness) external nonReentrant {
+        if (msg.sender != vrfCoordinator) revert OnlyCoordinator();
+        uint256 roundId = roundOfRequest[requestId];
+        if (roundId == 0 || roundId != currentRoundId) revert StaleVrfResponse();
+        Round storage round = rounds[roundId];
+        if (round.status != RoundStatus.Committed) revert StaleVrfResponse();
+        _settleDraw(roundId, randomness, address(0));
+    }
+
+    /// Fallback draw using the pinned block's hash. Permissionless; the
+    /// caller earns `callerBounty` (paid from the fee). With a VRF request
+    /// pending, this path only opens after `vrfTimeout`, so a silent oracle
+    /// delays a draw but can never abort it. If the pinned block has aged out
+    /// of the 256-block hash window, the commitment is re-pinned instead of
     /// reverting, so the draw can never strand.
     function finalizeDraw() external nonReentrant {
         uint256 roundId = currentRoundId;
         Round storage round = rounds[roundId];
         if (round.status != RoundStatus.Committed) revert RoundNotCommitted();
+        if (vrfRequestOf[roundId] != 0 && block.timestamp < committedAt[roundId] + vrfTimeout) {
+            revert VrfStillPending();
+        }
         if (block.number <= round.randomnessBlock) revert RandomnessNotReady();
 
         bytes32 seed = blockhash(round.randomnessBlock);
@@ -258,9 +302,18 @@ contract DogeRaffle is Ownable2Step, Pausable, ReentrancyGuard {
             return;
         }
 
+        uint256 randomness =
+            uint256(keccak256(abi.encodePacked(seed, roundId, round.totalTickets, address(this))));
+        _settleDraw(roundId, randomness, msg.sender);
+    }
+
+    /// Shared settlement: pick the winner from `randomness`, escrow the
+    /// prize, pay treasury (and the bounty when `bountyTo` is nonzero), and
+    /// open the next round. The prize is ESCROWED as a claim, never pushed.
+    function _settleDraw(uint256 roundId, uint256 randomness, address bountyTo) private {
+        Round storage round = rounds[roundId];
         uint96 totalTickets = round.totalTickets;
-        uint256 winningTicket =
-            uint256(keccak256(abi.encodePacked(seed, roundId, totalTickets, address(this)))) % totalTickets;
+        uint256 winningTicket = randomness % totalTickets;
         address winner = _ownerOfTicket(roundId, winningTicket);
 
         // Gross pot = new ticket revenue + all eligible rollover. The fee is
@@ -268,7 +321,7 @@ contract DogeRaffle is Ownable2Step, Pausable, ReentrancyGuard {
         uint256 gross = round.pot + pendingCarry;
         pendingCarry = 0;
         uint256 fee = (gross * round.feeBps) / BPS;
-        uint256 bounty = callerBounty < fee ? callerBounty : fee;
+        uint256 bounty = bountyTo == address(0) ? 0 : (callerBounty < fee ? callerBounty : fee);
         uint256 prizeAmount = gross - fee;
 
         round.status = RoundStatus.Finalized;
@@ -286,7 +339,7 @@ contract DogeRaffle is Ownable2Step, Pausable, ReentrancyGuard {
 
         // interactions last (all state above is final)
         _pay(treasury, fee - bounty);
-        _pay(msg.sender, bounty);
+        if (bounty != 0) _pay(bountyTo, bounty);
     }
 
     // ------------------------------------------------------------- claims
@@ -402,6 +455,21 @@ contract DogeRaffle is Ownable2Step, Pausable, ReentrancyGuard {
         emit DrawIntervalSet(newInterval);
     }
 
+    /// Set (or clear, with address(0)) the VRF coordinator. Takes effect at
+    /// the next commit; a round already committed keeps the path it started
+    /// with. The raffle must be fee-exempt on the coordinator.
+    function setVrfCoordinator(address newCoordinator) external onlyOwner {
+        vrfCoordinator = newCoordinator;
+        emit VrfCoordinatorSet(newCoordinator);
+    }
+
+    /// Fallback delay before the blockhash path may settle a VRF round.
+    function setVrfTimeout(uint64 newTimeout) external onlyOwner {
+        if (newTimeout < 10 minutes) revert TimeoutTooShort();
+        vrfTimeout = newTimeout;
+        emit VrfTimeoutSet(newTimeout);
+    }
+
     function setCallerBounty(uint256 newBounty) external onlyOwner {
         callerBounty = newBounty;
         emit CallerBountySet(newBounty);
@@ -442,9 +510,16 @@ contract DogeRaffle is Ownable2Step, Pausable, ReentrancyGuard {
         return round.status == RoundStatus.Open && block.timestamp >= round.endTime;
     }
 
+    /// True when the FALLBACK blockhash path may run (the VRF path needs no
+    /// keeper — the coordinator callback settles it directly).
     function canFinalize() external view returns (bool) {
-        Round storage round = rounds[currentRoundId];
-        return round.status == RoundStatus.Committed && block.number > round.randomnessBlock;
+        uint256 roundId = currentRoundId;
+        Round storage round = rounds[roundId];
+        if (round.status != RoundStatus.Committed) return false;
+        if (vrfRequestOf[roundId] != 0 && block.timestamp < committedAt[roundId] + vrfTimeout) {
+            return false;
+        }
+        return block.number > round.randomnessBlock;
     }
 
     function prizeOf(uint256 roundId) external view returns (Prize memory) {
