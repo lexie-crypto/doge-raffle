@@ -1,15 +1,25 @@
-# Fly.io config for the VRF oracle (deployed by .github/workflows/deploy-oracle.yml).
-# A background worker: no [http_service], no public IP, one always-on machine.
-# The app name is passed with --app (repo variable FLY_APP, default below).
-app = "doge-raffle-vrf-oracle"
-primary_region = "iad"
+# fly.toml app configuration file generated for doge-raffle on 2026-11-06T19:19:19Z
+#
+# See https://fly.io/docs/reference/configuration/ for information about how to use this file.
+#
+
+app = 'doge-raffle'
+primary_region = 'ams'
 
 [build]
-  dockerfile = "Dockerfile"
+  dockerfile = 'Dockerfile'
 
 [env]
-  POLL_MS = "3000"
+  POLL_MS = '3000'
+
+[http_service]
+  internal_port = 8080
+  force_https = true
+  auto_stop_machines = 'stop'
+  auto_start_machines = true
+  min_machines_running = 0
+  processes = ['app']
 
 [[vm]]
-  size = "shared-cpu-1x"
-  memory = "256mb"
+  size = 'shared-cpu-1x'
+  memory = '256mb'
