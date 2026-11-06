@@ -95,6 +95,17 @@ export RAFFLE_FOUNDATION=0x...      # Dogecoin Foundation wallet, receives 5% (d
 forge script script/Deploy.s.sol --rpc-url dogeos_testnet --broadcast
 ```
 
+For a staged replacement of the funded testnet raffle, save the current owner
+wallet's private key as the GitHub Actions secret `DEPLOYER_PRIVATE_KEY`, then
+run the manual **deploy-staged-raffle** workflow. Do not paste the key into a
+chat or commit it. The workflow deploys a new raffle, copies the legacy payout
+addresses, bundle prices, wallet admin, timeout, and bounty, and authorizes it
+on the existing VRF coordinator. Its log prints the new contract address. The
+new raffle starts **paused** and the workflow does **not** change the site or
+keeper address: the old raffle must still draw its funded round and give the
+winner the full claim period. Check both
+contracts' on-chain state before a later address cutover.
+
 Chain: id `6281971`, RPC `https://rpc.testnet.dogeos.com/`, explorer [dogeos-testnet.l2scan.co](https://dogeos-testnet.l2scan.co). Contracts compile with Solidity 0.8.31 / `osaka` EVM target per the [DogeOS docs](https://docs.dogeos.com/en/developers/ethereum-and-dogeos-differences).
 
 Then set the repo's Actions config (Settings → Secrets and variables → Actions):
