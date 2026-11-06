@@ -19,7 +19,7 @@
 //   VRF_SECRET_KEY       - the ECVRF secret key (matches the registered pubkey)
 //   ORACLE_PRIVATE_KEY   - tx-signing hot wallet (gas only; may differ from VRF key)
 //   RPC_URL              - optional
-//   LOOKBACK             - how many recent request ids to re-check (default 500)
+//   SCAN_BATCH           - request ids read per pass/page (default 500)
 //   POLL_MS              - watch-mode poll interval (default 3000)
 
 import { createPublicClient, createWalletClient, defineChain, http, parseAbi } from "viem";
@@ -28,7 +28,7 @@ import { prove } from "./ecvrf.mjs";
 
 const RPC_URL = process.env.RPC_URL ?? "https://rpc.testnet.dogeos.com/";
 const { COORDINATOR_ADDRESS, VRF_SECRET_KEY, ORACLE_PRIVATE_KEY } = process.env;
-const LOOKBACK = BigInt(process.env.LOOKBACK ?? "500");
+const SCAN_BATCH = BigInt(process.env.SCAN_BATCH ?? process.env.LOOKBACK ?? "500");
 const POLL_MS = Number(process.env.POLL_MS ?? "3000");
 const WATCH = process.argv.includes("--watch");
 
@@ -36,6 +36,7 @@ if (!COORDINATOR_ADDRESS || !VRF_SECRET_KEY || !ORACLE_PRIVATE_KEY) {
   console.error("COORDINATOR_ADDRESS, VRF_SECRET_KEY and ORACLE_PRIVATE_KEY are required");
   process.exit(1);
 }
+if (SCAN_BATCH < 1n) throw new Error("SCAN_BATCH must be positive");
 
 const chain = defineChain({
   id: 6281971,
@@ -72,20 +73,33 @@ function proofToTuple(proof) {
   };
 }
 
-/** Unfulfilled request ids among the most recent LOOKBACK. */
+// Watch mode walks every request id in rotating pages. Cron mode scans all
+// pages in one pass. Neither mode permanently skips an old paid request.
+let scanCursor = 1n;
+
 async function pendingIds() {
   const last = await pub.readContract({ ...coordinator, functionName: "lastRequestId" });
   if (last === 0n) return [];
-  const from = last > LOOKBACK ? last - LOOKBACK + 1n : 1n;
-  const ids = [];
-  for (let id = from; id <= last; id++) ids.push(id);
-  const res = await pub.multicall({
-    contracts: ids.map((id) => ({ ...coordinator, functionName: "pendingRequest", args: [id] })),
-  });
-  return ids
-    .map((id, i) => ({ id, r: res[i] }))
-    .filter(({ r }) => r.status === "success" && r.result[0] !== "0x0000000000000000000000000000000000000000" && !r.result[2])
-    .map(({ id, r }) => ({ id, seed: r.result[3] }));
+  const from = WATCH && scanCursor <= last ? scanCursor : 1n;
+  const through = WATCH && from + SCAN_BATCH - 1n < last ? from + SCAN_BATCH - 1n : last;
+  if (WATCH) scanCursor = through + 1n;
+
+  const pending = [];
+  for (let start = from; start <= through; start += SCAN_BATCH) {
+    const stop = start + SCAN_BATCH - 1n < through ? start + SCAN_BATCH - 1n : through;
+    const ids = [];
+    for (let id = start; id <= stop; id++) ids.push(id);
+    const res = await pub.multicall({
+      contracts: ids.map((id) => ({ ...coordinator, functionName: "pendingRequest", args: [id] })),
+    });
+    pending.push(
+      ...ids
+        .map((id, i) => ({ id, r: res[i] }))
+        .filter(({ r }) => r.status === "success" && r.result[0] !== "0x0000000000000000000000000000000000000000" && !r.result[2])
+        .map(({ id, r }) => ({ id, seed: r.result[3] })),
+    );
+  }
+  return pending;
 }
 
 async function fulfillOne({ id, seed }) {

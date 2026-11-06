@@ -1,6 +1,7 @@
 "use client";
 
 import { useEffect, useMemo, useState } from "react";
+import { isAddress } from "viem";
 import {
   useAccount,
   useConnect,
@@ -82,6 +83,8 @@ export default function Home() {
   const isConnected = mounted && liveConnected;
   const address = mounted ? liveAddress : undefined;
   const { write: writeContract, txHash, isPending, error: txError } = useSafeWrite();
+  const [claimRecipient, setClaimRecipient] = useState("");
+  const [payoutRecipient, setPayoutRecipient] = useState("");
   const { isLoading: txConfirming, isSuccess: txConfirmed } = useWaitForTransactionReceipt({
     hash: txHash,
   });
@@ -91,6 +94,15 @@ export default function Home() {
     ...raffle,
     functionName: "currentRoundId",
   });
+
+  // The active testnet raffle predates recipient-directed claims. Keep these
+  // actions hidden until the site points at a deployed contract with the fix.
+  const { data: minClaimWindow } = useReadContract({
+    ...raffle,
+    functionName: "MIN_CLAIM_WINDOW",
+    query: { retry: false },
+  });
+  const supportsRedirect = minClaimWindow === 7n * 24n * 60n * 60n;
 
   const { data: round, refetch: refetchRound } = useReadContract({
     ...raffle,
@@ -443,6 +455,36 @@ export default function Home() {
                 <p className="mt-2 text-xs text-amber-900/70">
                   Sent straight to your wallet — you pay a tiny network fee.
                 </p>
+                {supportsRedirect && <details className="mt-4 text-sm text-amber-950">
+                  <summary className="cursor-pointer font-semibold underline">
+                    Claim to another address
+                  </summary>
+                  <p className="mt-2 max-w-xl text-amber-900/80">
+                    If your winning wallet cannot receive DOGE, it can direct its prize to a payable
+                    address. Check the address carefully: this transfer cannot be undone.
+                  </p>
+                  <input
+                    aria-label="Prize recipient address"
+                    value={claimRecipient}
+                    onChange={(event) => setClaimRecipient(event.target.value.trim())}
+                    placeholder="0x..."
+                    className="mt-2 w-full max-w-md rounded-lg border border-amber-500 bg-white p-2 font-mono text-sm"
+                  />
+                  <button
+                    onClick={() =>
+                      writeContract({
+                        ...raffle,
+                        functionName: "claimPrizeTo",
+                        args: [myClaim.roundId, claimRecipient as `0x${string}`],
+                        chainId: dogeosChikyu.id,
+                      })
+                    }
+                    disabled={busy || !isAddress(claimRecipient) || claimRecipient === ZERO_ADDR}
+                    className="doge-btn mt-2 block rounded-full bg-amber-950 px-5 py-2 font-semibold text-amber-300 disabled:opacity-40"
+                  >
+                    Claim to this address
+                  </button>
+                </details>}
               </div>
             </div>
           </section>
@@ -559,6 +601,31 @@ export default function Home() {
               >
                 Withdraw
               </button>
+              {supportsRedirect && <details className="mt-3 text-sm text-emerald-900">
+                <summary className="cursor-pointer font-semibold underline">Withdraw to another address</summary>
+                <p className="mt-2">Use this if your wallet rejects an incoming DOGE transfer.</p>
+                <input
+                  aria-label="Payout recipient address"
+                  value={payoutRecipient}
+                  onChange={(event) => setPayoutRecipient(event.target.value.trim())}
+                  placeholder="0x..."
+                  className="mt-2 w-full max-w-md rounded-lg border border-emerald-500 bg-white p-2 font-mono text-sm"
+                />
+                <button
+                  onClick={() =>
+                    writeContract({
+                      ...raffle,
+                      functionName: "withdrawPayoutTo",
+                      args: [payoutRecipient as `0x${string}`],
+                      chainId: dogeosChikyu.id,
+                    })
+                  }
+                  disabled={busy || !isAddress(payoutRecipient) || payoutRecipient === ZERO_ADDR}
+                  className="doge-btn mt-2 block rounded-full bg-emerald-700 px-5 py-2 font-semibold text-white disabled:opacity-40"
+                >
+                  Withdraw to this address
+                </button>
+              </details>}
             </div>
           )}
         </section>

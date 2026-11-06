@@ -1,10 +1,10 @@
 // Draw-keeper backstop for DogeRaffle on DogeOS Chikyu testnet.
 //
 // The draw is permissionless (anyone can call commitDraw/finalizeDraw and
-// earn the bounty); this bot guarantees it happens on schedule even if nobody
-// else calls. Draws are on the 1st of each month at 00:00 UTC (fixed by the
-// contract), so the workflow fires exactly then (see
-// .github/workflows/draw-bot.yml). If GitHub starts the run a little early
+// earn the bounty); this bot is an operational backstop when nobody else
+// calls. Draws are scheduled for the 1st at 00:00 UTC (fixed by the
+// contract), so the workflow checks regularly (see
+// .github/workflows/draw-bot.yml). If GitHub starts a run a little early
 // (within WINDOW_HOURS of the deadline) it waits for the deadline; if the
 // draw is already done it exits in seconds. GitHub cron is best-effort, so
 // eventual execution is promised only while a funded bot (or any independent
@@ -52,6 +52,7 @@ const abi = parseAbi([
   "function rounds(uint256) view returns (uint64 startTime, uint64 endTime, uint64 randomnessBlock, uint8 status, uint16 feeBps, uint16 foundationBps, uint96 totalTickets, uint256 pot, address winner)",
   "function canCommit() view returns (bool)",
   "function canFinalize() view returns (bool)",
+  "function vrfRequestOf(uint256) view returns (uint256)",
   "function commitDraw()",
   "function finalizeDraw()",
 ]);
@@ -132,6 +133,15 @@ async function main() {
       console.log(`empty round ${before.id} rolled over; round ${after.id} open`);
       return;
     }
+  }
+
+  // The workflow's next step runs the VRF oracle. Leave this step successful
+  // while a valid request is pending so GitHub does not skip that responder.
+  // A later scheduled run handles the fallback after its on-chain timeout.
+  const pending = await roundState();
+  if (pending.status === 1 && (await read("vrfRequestOf", [pending.id])) !== 0n && !(await read("canFinalize"))) {
+    console.log(`round ${pending.id} awaits VRF fulfillment or fallback timeout`);
+    return;
   }
 
   // Step 2: poll until the pinned randomness block is usable, then finalize
