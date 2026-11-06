@@ -39,7 +39,7 @@ export function ConnectWallet() {
 
   if (!mounted) {
     return (
-      <button className="rounded-full bg-amber-500 px-5 py-2.5 font-bold text-white opacity-60">
+      <button className="whitespace-nowrap rounded-full bg-amber-500 px-4 py-2.5 text-sm font-bold text-white opacity-60 sm:px-5 sm:text-base">
         Connect wallet
       </button>
     );
@@ -83,7 +83,7 @@ export function ConnectWallet() {
           setOpen(true);
         }}
         disabled={isPending}
-        className="doge-btn rounded-full bg-amber-500 px-5 py-2.5 font-bold text-white shadow-md hover:bg-amber-400 disabled:opacity-50"
+        className="doge-btn whitespace-nowrap rounded-full bg-amber-500 px-4 py-2.5 text-sm font-bold text-white shadow-md hover:bg-amber-400 disabled:opacity-50 sm:px-5 sm:text-base"
       >
         {isPending ? "Connecting…" : "Connect wallet"}
       </button>

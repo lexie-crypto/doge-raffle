@@ -280,8 +280,12 @@ export function Fairness({ totalTickets }: { totalTickets: bigint }) {
           </li>
           <li>
             <b className="text-amber-300">2. A random number is generated on-chain.</b> It comes
-            with a cryptographic proof (a VRF) that the smart contract checks before accepting
-            it — nobody, including us, can choose or change it.
+            with a cryptographic proof from{" "}
+            <a href="/vrf" className="font-semibold text-amber-300 underline">
+              DogeOS VRF
+            </a>{" "}
+            that the smart contract checks before accepting it — nobody, including us, can choose
+            or change it.
           </li>
           <li>
             <b className="text-amber-300">3. The number picks the ticket.</b> Winning ticket =

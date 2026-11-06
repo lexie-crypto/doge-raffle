@@ -22,3 +22,7 @@ export const dogeosChikyu = defineChain({
 /** Set after deployment (see contracts/script/Deploy.s.sol). */
 export const RAFFLE_ADDRESS = (process.env.NEXT_PUBLIC_RAFFLE_ADDRESS ??
   "0x0000000000000000000000000000000000000000") as `0x${string}`;
+
+/** DogeOS VRF coordinator (randomness service). */
+export const VRF_COORDINATOR_ADDRESS = (process.env.NEXT_PUBLIC_VRF_COORDINATOR_ADDRESS ??
+  "0x0000000000000000000000000000000000000000") as `0x${string}`;

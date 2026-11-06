@@ -11,9 +11,9 @@ import {
 } from "wagmi";
 import { PrizeStatus, raffleAbi } from "@/lib/abi";
 import { RAFFLE_ADDRESS, dogeosChikyu } from "@/lib/chain";
-import { ConnectWallet } from "./connect";
 import { CoinRain, CoinStack, DogeCoin, DogeOSBadge, Rays, WowSeal } from "./doge";
 import { MyTickets } from "./my-tickets";
+import { SiteFooter, SiteNav } from "./site-chrome";
 import {
   CountdownTiles,
   DrawDate,
@@ -61,14 +61,6 @@ function TimeLeft({ until }: { until: bigint }) {
   return <>{left === 0 ? "expired" : `${d}d ${h}h ${m}m`}</>;
 }
 
-const NAV = [
-  { href: "#buy", label: "Buy tickets" },
-  { href: "#how", label: "How it works" },
-  { href: "#split", label: "Where the pot goes" },
-  { href: "#my-tickets", label: "My tickets" },
-  { href: "#draws", label: "Past draws" },
-  { href: "#faq", label: "FAQ" },
-];
 
 const FACTS = [
   "90% of the pot to the winner",
@@ -121,18 +113,8 @@ export default function Home() {
 
   const { data: bundles } = useReadContract({ ...raffle, functionName: "allBundles" });
 
-  const { data: config } = useReadContracts({
-    contracts: [
-      { ...raffle, functionName: "treasury" as const },
-      { ...raffle, functionName: "foundationWallet" as const },
-      { ...raffle, functionName: "callerBounty" as const },
-      { ...raffle, functionName: "vrfCoordinator" as const },
-    ],
-  });
-  const treasuryAddr = config?.[0]?.result as string | undefined;
-  const foundationAddr = config?.[1]?.result as string | undefined;
-  const bountyWei = (config?.[2]?.result as bigint | undefined) ?? BigInt(10) ** BigInt(18);
-  const coordinatorAddr = config?.[3]?.result as string | undefined;
+  const { data: callerBounty } = useReadContract({ ...raffle, functionName: "callerBounty" });
+  const bountyWei = callerBounty ?? BigInt(10) ** BigInt(18);
 
   const { data: myTickets, refetch: refetchMyTickets } = useReadContract({
     ...raffle,
@@ -269,25 +251,7 @@ export default function Home() {
 
   return (
     <div className="relative overflow-x-hidden">
-      {/* ============================================================ NAV */}
-      <nav className="sticky top-0 z-40 border-b border-amber-200/70 bg-[#fdf6e3]/85 backdrop-blur">
-        <div className="mx-auto flex max-w-6xl items-center justify-between gap-4 px-4 py-3">
-          <a href="#top" className="flex items-center gap-2">
-            <DogeCoin size={38} className="bob" />
-            <span className="display text-2xl font-bold tracking-tight text-amber-950">
-              Doge Raffle
-            </span>
-          </a>
-          <div className="hidden items-center gap-5 text-sm font-semibold text-amber-900/80 lg:flex">
-            {NAV.map((n) => (
-              <a key={n.href} href={n.href} className="transition hover:text-amber-600">
-                {n.label}
-              </a>
-            ))}
-          </div>
-          <ConnectWallet />
-        </div>
-      </nav>
+      <SiteNav />
 
       {/* ============================================================ HERO */}
       <header
@@ -678,52 +642,7 @@ export default function Home() {
         </section>
       </main>
 
-      {/* ============================================================ FOOTER */}
-      <footer className="relative overflow-hidden bg-amber-950 text-amber-100/80">
-        <div className="pointer-events-none absolute -right-16 -top-16 opacity-10">
-          <DogeCoin size={360} />
-        </div>
-        <div className="relative mx-auto grid max-w-6xl gap-10 px-4 py-14 md:grid-cols-[1.3fr_1fr]">
-          <div>
-            <div className="flex items-center gap-3">
-              <DogeCoin size={52} />
-              <span className="display text-3xl font-bold text-amber-200">Doge Raffle</span>
-            </div>
-            <p className="mt-4 max-w-md">
-              A monthly DOGE jackpot running entirely on smart contracts on{" "}
-              <a href="https://dogeos.com" target="_blank" rel="noreferrer" className="font-semibold text-amber-300 underline">
-                DogeOS
-              </a>
-              , the app layer for Dogecoin.
-            </p>
-            <p className="mt-4 text-xs text-amber-100/50">
-              Testnet only — not an offer to gamble. Paid raffles are regulated in many
-              jurisdictions. Dogecoin artwork from the Dogecoin Core project (MIT). Not affiliated
-              with or endorsed by the Dogecoin Foundation.
-            </p>
-          </div>
-          <div className="space-y-2 text-sm">
-            <div className="display mb-3 text-lg font-bold text-amber-200">Verify it yourself</div>
-            {[
-              ["Raffle contract", RAFFLE_ADDRESS as string],
-              ["Randomness (VRF)", coordinatorAddr],
-              ["Dogecoin Foundation wallet", foundationAddr],
-              ["Protocol wallet", treasuryAddr],
-            ].map(([label, addr]) => (
-              <div key={label} className="flex justify-between gap-4 border-b border-amber-100/10 pb-2">
-                <span>{label}</span>
-                {addr ? (
-                  <a className="font-mono text-amber-300 underline" href={`${explorer}/address/${addr}`} target="_blank" rel="noreferrer">
-                    {short(addr)}
-                  </a>
-                ) : (
-                  <span className="text-amber-100/40">…</span>
-                )}
-              </div>
-            ))}
-          </div>
-        </div>
-      </footer>
+      <SiteFooter />
     </div>
   );
 }

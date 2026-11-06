@@ -49,6 +49,15 @@ Chainlink VRF does not support DogeOS, so this repo ships its own VRF service �
 - **Raffle integration** — `commitDraw()` requests randomness (the raffle is fee-exempt); the coordinator's verified callback settles the draw. If the oracle stays silent past `vrfTimeout` (default 6h), the permissionless **blockhash fallback** settles instead — so a withholding oracle can delay a draw but never abort or redirect it, and the delay is publicly visible on-chain. With no coordinator set the blockhash path runs alone (bootstrap mode; `PREVRANDAO` returns 0 on DogeOS, hence commit + future-blockhash).
 - **Monetization** — the coordinator charges a per-request fee in native DOGE (default 2 DOGE, owner-settable) to any third-party DogeOS dApp that wants verifiable randomness; fees accrue to the owner. House consumers are whitelisted fee-exempt.
 
+**Running the VRF for third parties.** `bot/vrf-oracle.mjs` finds pending requests by walking request ids (DogeOS RPCs cap log queries at 10,000 blocks, ids need no range). The monthly GitHub workflow runs it once per draw, which is enough for the raffle. For other dApps, responses must arrive in seconds, so run it in watch mode on any always-on host (a small VPS, Railway, Fly, etc.):
+
+```bash
+cd bot && npm install
+COORDINATOR_ADDRESS=0x... VRF_SECRET_KEY=0x... ORACLE_PRIVATE_KEY=0x... node vrf-oracle.mjs --watch
+```
+
+Developer-facing docs live on the site at `/docs` (product page at `/vrf`). The code samples there are copied at build time from `contracts/src/examples/DiceRoller.sol` (tested end-to-end with real proofs in `contracts/test/DiceRoller.t.sol`) and `bot/examples/request-randomness.mjs` (run end-to-end on testnet), so they can't drift from tested code.
+
 **Residual trust, stated plainly:** VRF outputs are unforgeable, but the key holder sees an output before posting and could *withhold* it, steering the round to the (also unpredictable) blockhash fallback; the fallback itself carries sequencer-influence and timing caveats. This is a major upgrade over blockhash-only, but **real-value launch still requires a reviewed randomness design** (e.g. key management, fallback policy) **and legal clearance.** Keep the VRF secret key offline-backed and separate from the gas wallet.
 
 ## Development

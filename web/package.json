@@ -5,7 +5,8 @@
   "scripts": {
     "dev": "next dev",
     "build": "next build",
-    "start": "next start"
+    "start": "next start",
+    "prebuild": "node scripts/sync-snippets.mjs"
   },
   "dependencies": {
     "@tanstack/react-query": "^5.106.1",
