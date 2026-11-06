@@ -7,12 +7,12 @@ import {
   useReadContract,
   useReadContracts,
   useWaitForTransactionReceipt,
-  useWriteContract,
 } from "wagmi";
 import { PrizeStatus, raffleAbi } from "@/lib/abi";
 import { RAFFLE_ADDRESS, dogeosChikyu } from "@/lib/chain";
 import { CoinRain, CoinStack, DogeCoin, DogeOSBadge, Rays, WowSeal } from "./doge";
 import { MyTickets } from "./my-tickets";
+import { useSafeWrite } from "./use-safe-write";
 import { SiteFooter, SiteNav } from "./site-chrome";
 import {
   CountdownTiles,
@@ -81,7 +81,7 @@ export default function Home() {
   const mounted = nowSec !== null;
   const isConnected = mounted && liveConnected;
   const address = mounted ? liveAddress : undefined;
-  const { writeContract, data: txHash, isPending, error: txError } = useWriteContract();
+  const { write: writeContract, txHash, isPending, error: txError } = useSafeWrite();
   const { isLoading: txConfirming, isSuccess: txConfirmed } = useWaitForTransactionReceipt({
     hash: txHash,
   });
@@ -515,7 +515,7 @@ export default function Home() {
             </p>
           )}
           {txError && (
-            <p className="mt-5 text-center text-sm text-red-600">{txError.message.split("\n")[0]}</p>
+            <p className="mx-auto mt-5 max-w-xl rounded-xl bg-red-50 p-3 text-center text-sm text-red-700">{txError}</p>
           )}
         </section>
 
