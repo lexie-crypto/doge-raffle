@@ -25,8 +25,16 @@ contract RejectingReceiver {
         raffle.claimPrize(roundId);
     }
 
+    function claimTo(DogeRaffle raffle, uint256 roundId, address payable recipient) external {
+        raffle.claimPrizeTo(roundId, recipient);
+    }
+
     function withdraw(DogeRaffle raffle) external {
         raffle.withdrawPayout();
+    }
+
+    function withdrawTo(DogeRaffle raffle, address payable recipient) external {
+        raffle.withdrawPayoutTo(recipient);
     }
 }
 
@@ -294,6 +302,19 @@ contract DogeRaffleTest is Test {
         assertEq(address(rejector).balance, 18 ether); // 20 - 5% - 5%
     }
 
+    function test_contractWinnerCanClaimToPayableRecipient() public {
+        RejectingReceiver rejector = new RejectingReceiver();
+        vm.deal(address(this), 20 ether);
+        rejector.buy{value: 20 ether}(raffle, SINGLE);
+        uint256 roundId = _draw();
+
+        uint256 beforeBalance = alice.balance;
+        rejector.claimTo(raffle, roundId, payable(alice));
+        assertEq(alice.balance - beforeBalance, 18 ether);
+        assertEq(raffle.reservedDoge(), 0);
+        assertEq(uint8(raffle.prizeOf(roundId).status), uint8(DogeRaffle.PrizeStatus.Claimed));
+    }
+
     function test_reentrancyDuringClaimBlocked() public {
         ReentrantClaimer attacker = new ReentrantClaimer(raffle);
         vm.deal(address(this), 20 ether);
@@ -526,6 +547,23 @@ contract DogeRaffleTest is Test {
         fresh.claimPrize(1);
     }
 
+    function test_lateSettlementSkipsBoundaryToProtectClaimWindow() public {
+        vm.warp(1_762_430_400); // 2026-11-06
+        DogeRaffle fresh = new DogeRaffle(owner, treasury, foundation);
+        vm.prank(alice);
+        fresh.buyTickets{value: 20 ether}(SINGLE);
+
+        vm.warp(1_767_225_599); // 2026-12-31 23:59:59 UTC
+        fresh.commitDraw();
+        (,, uint64 randomnessBlock,,,,,,) = fresh.rounds(1);
+        vm.roll(uint256(randomnessBlock) + 1);
+        fresh.finalizeDraw();
+
+        uint64 cutoff = fresh.prizeOf(1).claimCutoff;
+        assertEq(cutoff, 1_769_904_000, "near-boundary draw must skip to Feb 1");
+        assertGe(cutoff - block.timestamp, fresh.MIN_CLAIM_WINDOW());
+    }
+
     function test_nextDrawTime_knownDates() public view {
         assertEq(raffle.nextDrawTime(1_767_225_599), 1_767_225_600, "Dec 31 23:59:59 -> Jan 1");
         assertEq(raffle.nextDrawTime(1_767_225_600), 1_769_904_000, "exactly Jan 1 -> Feb 1 2027");
@@ -629,6 +667,52 @@ contract DogeRaffleTest is Test {
         badTreasury.setAllow(true);
         badTreasury.withdraw(raffle);
         assertEq(address(badTreasury).balance, 49 ether);
+    }
+
+    function test_failedPayoutCanBeRedirectedWithoutChangingRecipient() public {
+        RejectingReceiver badTreasury = new RejectingReceiver();
+        vm.prank(owner);
+        raffle.setTreasury(address(badTreasury));
+
+        _buySingles(alice, 50);
+        _draw();
+        assertEq(raffle.withdrawable(address(badTreasury)), 49 ether);
+
+        uint256 owed = raffle.reservedDoge();
+        vm.deal(address(raffle), address(raffle).balance + 7 ether);
+        vm.prank(owner);
+        raffle.recoverExcess(payable(owner));
+        assertEq(address(raffle).balance, owed, "claim and failed fee remain reserved");
+
+        uint256 beforeBalance = bob.balance;
+        badTreasury.withdrawTo(raffle, payable(bob));
+        assertEq(bob.balance - beforeBalance, 49 ether);
+        assertEq(raffle.withdrawable(address(badTreasury)), 0);
+        assertEq(raffle.reservedDoge(), raffle.prizeOf(1).amount);
+    }
+
+    function test_onlyForcedExcessCanBeRecovered() public {
+        _buySingles(alice, 1);
+        assertEq(raffle.reservedDoge(), 20 ether);
+        vm.prank(owner);
+        vm.expectRevert(DogeRaffle.NoExcess.selector);
+        raffle.recoverExcess(payable(owner));
+
+        vm.deal(address(raffle), 25 ether); // models a forced native-DOGE token transfer
+        vm.prank(bob);
+        vm.expectRevert();
+        raffle.recoverExcess(payable(bob));
+        vm.prank(owner);
+        raffle.recoverExcess(payable(owner));
+        assertEq(owner.balance, 5 ether);
+        assertEq(address(raffle).balance, 20 ether);
+        assertEq(raffle.reservedDoge(), 20 ether);
+
+        _draw();
+        vm.prank(alice);
+        raffle.claimPrize(1);
+        assertEq(raffle.reservedDoge(), 0);
+        assertEq(address(raffle).balance, 0);
     }
 
     // --------------------------------------------------------------- draws
@@ -753,6 +837,7 @@ contract DogeRaffleTest is Test {
             p1.amount + raffle.withdrawable(treasury) + raffle.withdrawable(foundation),
             "post-draw escrow accounting"
         );
+        assertEq(raffle.reservedDoge(), address(raffle).balance);
 
         if (claimR1) {
             vm.prank(w1);
@@ -778,6 +863,7 @@ contract DogeRaffleTest is Test {
                 + raffle.withdrawable(bob),
             "all residue is pull-credits"
         );
+        assertEq(raffle.reservedDoge(), address(raffle).balance);
     }
 
     /// Statistical fairness: alice 1 ticket vs bob 9 — bob wins ~90%.
@@ -868,19 +954,28 @@ contract DogeRaffleTest is Test {
         (address b0, uint256 f0, uint256 l0) = raffle.entryAt(1, 0);
         (address b1, uint256 f1, uint256 l1) = raffle.entryAt(1, 1);
         (address b2, uint256 f2, uint256 l2) = raffle.entryAt(1, 2);
-        assertEq(b0, alice); assertEq(f0, 0); assertEq(l0, 0);
-        assertEq(b1, bob); assertEq(f1, 1); assertEq(l1, 10);
-        assertEq(b2, alice); assertEq(f2, 11); assertEq(l2, 15);
+        assertEq(b0, alice);
+        assertEq(f0, 0);
+        assertEq(l0, 0);
+        assertEq(b1, bob);
+        assertEq(f1, 1);
+        assertEq(l1, 10);
+        assertEq(b2, alice);
+        assertEq(f2, 11);
+        assertEq(l2, 15);
 
         // force the draw onto ticket #7 and check it is recorded + bob wins
         _endRound();
         raffle.commitDraw();
         uint64 rb = _round(1).randomnessBlock;
         vm.roll(uint256(rb) + 1);
-        bytes32 seedHash; uint256 nonce;
+        bytes32 seedHash;
+        uint256 nonce;
         while (true) {
             seedHash = keccak256(abi.encode("audit", nonce));
-            if (uint256(keccak256(abi.encodePacked(seedHash, uint256(1), uint96(16), address(raffle)))) % 16 == 7) break;
+            if (uint256(keccak256(abi.encodePacked(seedHash, uint256(1), uint96(16), address(raffle)))) % 16 == 7) {
+                break;
+            }
             nonce++;
         }
         vm.setBlockhash(rb, seedHash);

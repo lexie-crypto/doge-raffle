@@ -35,9 +35,9 @@ interface IVRFCoordinator {
 /// output; the coordinator's verified callback settles the draw. If the
 /// oracle stays silent past `vrfTimeout`, the permissionless blockhash path
 /// (commit + future blockhash, since PREVRANDAO returns 0 on DogeOS) settles
-/// instead, so a withholding oracle can delay a draw but never abort it —
-/// and the delay is publicly visible on-chain. With no coordinator set, the
-/// blockhash path runs alone (testnet bootstrap mode; not fit for real value).
+/// instead. This preserves a settlement path but does not make the fallback
+/// unbiased: withholding, sequencer influence, and an unfinalized hash window
+/// can change the outcome. This design is testnet-only, not fit for real value.
 ///
 /// Fail-closed guarantees:
 ///  - pause() stops ticket SALES only; draws, claims and withdrawals can
@@ -50,7 +50,8 @@ interface IVRFCoordinator {
 ///    or after it can never both consume the same funds.
 ///  - The owner can change prices/fees for FUTURE rounds, but can
 ///    never touch an active pot, an awarded claim, or anyone's withdrawable
-///    balance, and can never shorten an existing claim window.
+///    balance; recoverExcess only moves DOGE above all reserved liabilities.
+///    Existing claim windows cannot be shortened.
 contract DogeRaffle is Ownable2Step, Pausable, ReentrancyGuard, IVRFConsumer {
     // ---------------------------------------------------------------- types
 
@@ -104,6 +105,9 @@ contract DogeRaffle is Ownable2Step, Pausable, ReentrancyGuard, IVRFConsumer {
     uint256 public constant MAX_FEE_BPS = 1000; // 10% hard cap, per fee
     uint256 public constant BPS = 10_000;
     uint64 public constant RANDOMNESS_DELAY = 10; // blocks between commit and draw
+    uint64 public constant MIN_CLAIM_WINDOW = 7 days;
+    uint64 public constant MAX_VRF_TIMEOUT = 1 days;
+    uint256 public constant VRF_REQUEST_GAS_LIMIT = 500_000;
 
     uint256 public feeBps = 500; // protocol 5% — applied to rounds opened after a change
     uint256 public foundationBps = 500; // Dogecoin Foundation 5% — likewise
@@ -129,6 +133,9 @@ contract DogeRaffle is Ownable2Step, Pausable, ReentrancyGuard, IVRFConsumer {
     /// Expired, unclaimed jackpot value awaiting the next TICKETED draw.
     /// Survives any number of empty rounds without fee or loss.
     uint256 public pendingCarry;
+    /// Ticket revenue still owed as prizes, carry, or failed fee/bounty payouts.
+    /// Forced native-DOGE token transfers are excluded and may be recovered.
+    uint256 public reservedDoge;
 
     /// Treasury/bounty payouts whose push transfer failed. Claim with
     /// {withdrawPayout}. Winner prizes never land here — they live in
@@ -139,7 +146,9 @@ contract DogeRaffle is Ownable2Step, Pausable, ReentrancyGuard, IVRFConsumer {
     address public vrfCoordinator;
     uint64 public vrfTimeout = 6 hours; // fallback delay before blockhash settles
     mapping(uint256 => uint256) public vrfRequestOf; // roundId => requestId
-    mapping(uint256 => uint256) public roundOfRequest; // requestId => roundId
+    mapping(uint256 => address) public vrfCoordinatorOf; // roundId => coordinator at commit
+    mapping(uint256 => uint64) public vrfTimeoutOf; // roundId => timeout at commit
+    mapping(address => mapping(uint256 => uint256)) public roundOfRequest; // coordinator + requestId => roundId
     mapping(uint256 => uint64) public committedAt; // roundId => commit timestamp
 
     // --------------------------------------------------------------- events
@@ -170,9 +179,7 @@ contract DogeRaffle is Ownable2Step, Pausable, ReentrancyGuard, IVRFConsumer {
     event PrizeClaimed(uint256 indexed roundId, address indexed winner, uint256 amount);
     event PrizeRolledOver(uint256 indexed roundId, uint256 amount, uint256 indexed intoRoundId);
     event EmptyRoundRolledOver(uint256 indexed roundId, uint256 carriedJackpot);
-    event RoundStarted(
-        uint256 indexed roundId, uint64 startTime, uint64 endTime, uint16 feeBps, uint16 foundationBps
-    );
+    event RoundStarted(uint256 indexed roundId, uint64 startTime, uint64 endTime, uint16 feeBps, uint16 foundationBps);
     event PayoutCredited(address indexed to, uint256 amount);
     event PayoutWithdrawn(address indexed to, uint256 amount);
     event BundlesSet(Bundle[] bundles);
@@ -183,8 +190,12 @@ contract DogeRaffle is Ownable2Step, Pausable, ReentrancyGuard, IVRFConsumer {
     event CallerBountySet(uint256 bounty);
     event TreasurySet(address treasury);
     event VrfRequested(uint256 indexed roundId, uint256 indexed requestId);
+    event VrfRequestFailed(uint256 indexed roundId, address indexed coordinator);
     event VrfCoordinatorSet(address coordinator);
     event VrfTimeoutSet(uint64 timeout);
+    event ExcessRecovered(address indexed to, uint256 amount);
+    event PrizeClaimedTo(uint256 indexed roundId, address indexed recipient, uint256 amount);
+    event PayoutWithdrawnTo(address indexed account, address indexed recipient, uint256 amount);
 
     // --------------------------------------------------------------- errors
 
@@ -209,6 +220,8 @@ contract DogeRaffle is Ownable2Step, Pausable, ReentrancyGuard, IVRFConsumer {
     error StaleVrfResponse();
     error VrfStillPending();
     error TimeoutTooShort();
+    error TimeoutTooLong();
+    error NoExcess();
 
     // ---------------------------------------------------------- constructor
 
@@ -229,7 +242,9 @@ contract DogeRaffle is Ownable2Step, Pausable, ReentrancyGuard, IVRFConsumer {
     /// Plain DOGE transfers are rejected so the pot always equals ticket
     /// revenue and accounting stays exact. (Forced transfers — e.g. via a
     /// pre-funded address — can still raise the raw balance; all accounting
-    /// uses internal tallies, never address(this).balance.)
+    /// uses internal tallies, never address(this).balance. DogeOS's native
+    /// token transfer also bypasses receive(); recoverExcess can return the
+    /// resulting unaccounted DOGE without touching reserved liabilities.)
     receive() external payable {
         revert DirectTransfersNotAccepted();
     }
@@ -249,6 +264,7 @@ contract DogeRaffle is Ownable2Step, Pausable, ReentrancyGuard, IVRFConsumer {
         uint96 newTotal = firstTicket + bundle.tickets;
         round.totalTickets = newTotal;
         round.pot += msg.value;
+        reservedDoge += msg.value;
         ticketsOf[currentRoundId][msg.sender] += bundle.tickets;
         _entries[currentRoundId].push(Entry({buyer: msg.sender, cumulative: newTotal}));
 
@@ -285,21 +301,43 @@ contract DogeRaffle is Ownable2Step, Pausable, ReentrancyGuard, IVRFConsumer {
         committedAt[roundId] = uint64(block.timestamp);
         emit DrawCommitted(roundId, round.randomnessBlock);
 
-        // Primary path: request verified randomness (raffle is fee-exempt).
-        if (vrfCoordinator != address(0)) {
-            uint256 requestId = IVRFCoordinator(vrfCoordinator).requestRandomness(bytes32(roundId));
-            vrfRequestOf[roundId] = requestId;
-            roundOfRequest[requestId] = roundId;
-            emit VrfRequested(roundId, requestId);
+        // A broken or misconfigured coordinator must not prevent settlement.
+        // Bound the call's gas so even a coordinator that burns all forwarded
+        // gas leaves enough for the fallback-only commitment to succeed. Copy
+        // only 32 return bytes so a malicious coordinator cannot return-bomb.
+        address coordinator = vrfCoordinator;
+        if (coordinator != address(0)) {
+            bytes memory callData = abi.encodeCall(IVRFCoordinator.requestRandomness, (bytes32(roundId)));
+            bool ok;
+            uint256 requestId;
+            uint256 responseSize;
+            uint256 gasLimit = VRF_REQUEST_GAS_LIMIT;
+            assembly {
+                let response := mload(0x40)
+                ok := call(gasLimit, coordinator, 0, add(callData, 0x20), mload(callData), response, 0x20)
+                responseSize := returndatasize()
+                requestId := mload(response)
+            }
+            if (!ok || responseSize != 32 || requestId == 0) {
+                emit VrfRequestFailed(roundId, coordinator);
+            } else {
+                vrfRequestOf[roundId] = requestId;
+                vrfCoordinatorOf[roundId] = coordinator;
+                vrfTimeoutOf[roundId] = vrfTimeout;
+                roundOfRequest[coordinator][requestId] = roundId;
+                emit VrfRequested(roundId, requestId);
+            }
         }
     }
 
     /// Coordinator callback: settle the draw with the verified VRF output.
     /// No bounty on this path — the oracle is compensated by the protocol.
     function rawFulfillRandomness(uint256 requestId, uint256 randomness) external nonReentrant {
-        if (msg.sender != vrfCoordinator) revert OnlyCoordinator();
-        uint256 roundId = roundOfRequest[requestId];
-        if (roundId == 0 || roundId != currentRoundId) revert StaleVrfResponse();
+        uint256 roundId = currentRoundId;
+        if (msg.sender != vrfCoordinatorOf[roundId]) revert OnlyCoordinator();
+        if (requestId != vrfRequestOf[roundId] || roundOfRequest[msg.sender][requestId] != roundId) {
+            revert StaleVrfResponse();
+        }
         Round storage round = rounds[roundId];
         if (round.status != RoundStatus.Committed) revert StaleVrfResponse();
         _settleDraw(roundId, randomness, address(0));
@@ -308,14 +346,14 @@ contract DogeRaffle is Ownable2Step, Pausable, ReentrancyGuard, IVRFConsumer {
     /// Fallback draw using the pinned block's hash. Permissionless; the
     /// caller earns `callerBounty` (paid from the fee). With a VRF request
     /// pending, this path only opens after `vrfTimeout`, so a silent oracle
-    /// delays a draw but can never abort it. If the pinned block has aged out
-    /// of the 256-block hash window, the commitment is re-pinned instead of
-    /// reverting, so the draw can never strand.
+    /// delays a draw but still leaves a permissionless settlement path. If
+    /// the pinned block has aged out of the 256-block hash window, the
+    /// commitment is re-pinned instead of reverting.
     function finalizeDraw() external nonReentrant {
         uint256 roundId = currentRoundId;
         Round storage round = rounds[roundId];
         if (round.status != RoundStatus.Committed) revert RoundNotCommitted();
-        if (vrfRequestOf[roundId] != 0 && block.timestamp < committedAt[roundId] + vrfTimeout) {
+        if (vrfRequestOf[roundId] != 0 && block.timestamp < committedAt[roundId] + vrfTimeoutOf[roundId]) {
             revert VrfStillPending();
         }
         if (block.number <= round.randomnessBlock) revert RandomnessNotReady();
@@ -328,8 +366,7 @@ contract DogeRaffle is Ownable2Step, Pausable, ReentrancyGuard, IVRFConsumer {
             return;
         }
 
-        uint256 randomness =
-            uint256(keccak256(abi.encodePacked(seed, roundId, round.totalTickets, address(this))));
+        uint256 randomness = uint256(keccak256(abi.encodePacked(seed, roundId, round.totalTickets, address(this))));
         _settleDraw(roundId, randomness, msg.sender);
     }
 
@@ -357,13 +394,11 @@ contract DogeRaffle is Ownable2Step, Pausable, ReentrancyGuard, IVRFConsumer {
         winningTicketOf[roundId] = winningTicket;
         prizes[roundId] = Prize({amount: prizeAmount, claimCutoff: 0, status: PrizeStatus.Claimable});
 
-        emit WinnerDrawn(
-            roundId, winner, winningTicket, prizeAmount, protocolFee, foundationFee, gross, totalTickets
-        );
+        emit WinnerDrawn(roundId, winner, winningTicket, prizeAmount, protocolFee, foundationFee, gross, totalTickets);
 
         // Open the next round, then fix this prize's cutoff to its scheduled
         // end — immutable from here on.
-        _startRound();
+        _startRound(MIN_CLAIM_WINDOW);
         uint64 cutoff = rounds[currentRoundId].endTime;
         prizes[roundId].claimCutoff = cutoff;
         emit PrizeClaimable(roundId, winner, prizeAmount, cutoff);
@@ -380,6 +415,17 @@ contract DogeRaffle is Ownable2Step, Pausable, ReentrancyGuard, IVRFConsumer {
     /// gas. A failed transfer REVERTS — the claim is never burned. Works
     /// while paused.
     function claimPrize(uint256 roundId) external nonReentrant {
+        _claimPrize(roundId, payable(msg.sender));
+    }
+
+    /// A contract winner that cannot receive DOGE may direct its own claim
+    /// to a payable address. The winner must still initiate the call.
+    function claimPrizeTo(uint256 roundId, address payable recipient) external nonReentrant {
+        if (recipient == address(0)) revert ZeroAddress();
+        _claimPrize(roundId, recipient);
+    }
+
+    function _claimPrize(uint256 roundId, address payable recipient) private {
         Prize storage prize = prizes[roundId];
         if (msg.sender != rounds[roundId].winner) revert NotWinner();
         if (prize.status != PrizeStatus.Claimable) revert PrizeNotClaimable();
@@ -387,9 +433,11 @@ contract DogeRaffle is Ownable2Step, Pausable, ReentrancyGuard, IVRFConsumer {
 
         prize.status = PrizeStatus.Claimed;
         uint256 amount = prize.amount;
-        (bool ok,) = msg.sender.call{value: amount}("");
+        reservedDoge -= amount;
+        (bool ok,) = recipient.call{value: amount}("");
         if (!ok) revert ClaimTransferFailed();
         emit PrizeClaimed(roundId, msg.sender, amount);
+        if (recipient != msg.sender) emit PrizeClaimedTo(roundId, recipient, amount);
     }
 
     /// Move the prior round's prize into the jackpot if its cutoff has
@@ -417,26 +465,60 @@ contract DogeRaffle is Ownable2Step, Pausable, ReentrancyGuard, IVRFConsumer {
         if (!ok) {
             withdrawable[to] += amount;
             emit PayoutCredited(to, amount);
+        } else {
+            reservedDoge -= amount;
         }
     }
 
     /// Claim treasury/bounty payouts whose push transfer failed. Never pausable.
     function withdrawPayout() external nonReentrant {
+        _withdrawPayout(payable(msg.sender));
+    }
+
+    /// A payout recipient may redirect its own failed push to a payable
+    /// address, including when the original recipient rejects native DOGE.
+    function withdrawPayoutTo(address payable recipient) external nonReentrant {
+        if (recipient == address(0)) revert ZeroAddress();
+        _withdrawPayout(recipient);
+    }
+
+    function _withdrawPayout(address payable recipient) private {
         uint256 amount = withdrawable[msg.sender];
         if (amount == 0) revert NothingToWithdraw();
         withdrawable[msg.sender] = 0;
-        (bool ok,) = msg.sender.call{value: amount}("");
+        reservedDoge -= amount;
+        (bool ok,) = recipient.call{value: amount}("");
         require(ok, "withdraw failed");
         emit PayoutWithdrawn(msg.sender, amount);
+        if (recipient != msg.sender) emit PayoutWithdrawnTo(msg.sender, recipient, amount);
+    }
+
+    /// Recover only DOGE forced into the contract outside buyTickets. This
+    /// cannot touch ticket revenue, pending carry, prizes, or failed payouts.
+    function recoverExcess(address payable recipient) external onlyOwner nonReentrant {
+        if (recipient == address(0)) revert ZeroAddress();
+        uint256 excess = address(this).balance - reservedDoge;
+        if (excess == 0) revert NoExcess();
+        (bool ok,) = recipient.call{value: excess}("");
+        require(ok, "excess transfer failed");
+        emit ExcessRecovered(recipient, excess);
     }
 
     // ------------------------------------------------------------ internal
 
     function _startRound() private {
+        _startRound(0);
+    }
+
+    function _startRound(uint64 minClaimWindow) private {
         uint256 roundId = ++currentRoundId;
         Round storage round = rounds[roundId];
         round.startTime = uint64(block.timestamp);
-        round.endTime = nextDrawTime(uint64(block.timestamp));
+        uint64 endTime = nextDrawTime(uint64(block.timestamp));
+        // A late settlement near a month boundary must not give its winner
+        // only seconds to claim. Skip that boundary if necessary.
+        if (endTime - block.timestamp < minClaimWindow) endTime = nextDrawTime(endTime);
+        round.endTime = endTime;
         round.status = RoundStatus.Open;
         // snapshot both fees: owner can't re-fee an active pot
         round.feeBps = uint16(feeBps);
@@ -507,16 +589,18 @@ contract DogeRaffle is Ownable2Step, Pausable, ReentrancyGuard, IVRFConsumer {
     }
 
     /// Set (or clear, with address(0)) the VRF coordinator. Takes effect at
-    /// the next commit; a round already committed keeps the path it started
-    /// with. The raffle must be fee-exempt on the coordinator.
+    /// the next commit; a round already committed keeps the coordinator it
+    /// started with. The raffle should be fee-exempt on the coordinator;
+    /// a failed request uses fallback-only mode.
     function setVrfCoordinator(address newCoordinator) external onlyOwner {
         vrfCoordinator = newCoordinator;
         emit VrfCoordinatorSet(newCoordinator);
     }
 
-    /// Fallback delay before the blockhash path may settle a VRF round.
+    /// Fallback delay for future commits. Existing rounds keep their timeout.
     function setVrfTimeout(uint64 newTimeout) external onlyOwner {
         if (newTimeout < 10 minutes) revert TimeoutTooShort();
+        if (newTimeout > MAX_VRF_TIMEOUT) revert TimeoutTooLong();
         vrfTimeout = newTimeout;
         emit VrfTimeoutSet(newTimeout);
     }
@@ -533,7 +617,7 @@ contract DogeRaffle is Ownable2Step, Pausable, ReentrancyGuard, IVRFConsumer {
     }
 
     /// Pauses ticket SALES only. Draws, claims and withdrawals are
-    /// deliberately not pausable, so user funds can never be trapped.
+    /// deliberately not pausable; claims and settlement remain callable.
     function pause() external onlyOwner {
         _pause();
     }
@@ -547,7 +631,8 @@ contract DogeRaffle is Ownable2Step, Pausable, ReentrancyGuard, IVRFConsumer {
     /// Draws happen on the 1st of every calendar month at 00:00 UTC. A round
     /// opened at `ts` ends at the next such boundary strictly after `ts`, so
     /// the schedule never drifts and a late draw self-heals onto the next
-    /// boundary. Uses the proleptic Gregorian civil-date algorithm
+    /// boundary. A round opened after a draw can skip one boundary to give
+    /// its winner at least MIN_CLAIM_WINDOW. Uses the civil-date algorithm
     /// (Howard Hinnant), valid for any realistic timestamp.
     function nextDrawTime(uint64 ts) public pure returns (uint64) {
         (uint256 year, uint256 month) = _yearMonth(uint256(ts) / 1 days);
@@ -625,7 +710,7 @@ contract DogeRaffle is Ownable2Step, Pausable, ReentrancyGuard, IVRFConsumer {
         uint256 roundId = currentRoundId;
         Round storage round = rounds[roundId];
         if (round.status != RoundStatus.Committed) return false;
-        if (vrfRequestOf[roundId] != 0 && block.timestamp < committedAt[roundId] + vrfTimeout) {
+        if (vrfRequestOf[roundId] != 0 && block.timestamp < committedAt[roundId] + vrfTimeoutOf[roundId]) {
             return false;
         }
         return block.number > round.randomnessBlock;
@@ -651,11 +736,7 @@ contract DogeRaffle is Ownable2Step, Pausable, ReentrancyGuard, IVRFConsumer {
         return (prize.amount, prize.claimCutoff, block.timestamp < prize.claimCutoff);
     }
 
-    function currentRound()
-        external
-        view
-        returns (uint256 roundId, Round memory round, uint256 secondsUntilDraw)
-    {
+    function currentRound() external view returns (uint256 roundId, Round memory round, uint256 secondsUntilDraw) {
         roundId = currentRoundId;
         round = rounds[roundId];
         secondsUntilDraw = block.timestamp >= round.endTime ? 0 : round.endTime - block.timestamp;

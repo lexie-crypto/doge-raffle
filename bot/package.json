@@ -3,10 +3,12 @@
   "private": true,
   "type": "module",
   "scripts": {
-    "draw": "node draw-bot.mjs"
+    "draw": "node draw-bot.mjs",
+    "test": "node --test test/*.test.mjs"
   },
   "dependencies": {
     "@noble/curves": "^2.0.1",
+    "@noble/hashes": "2.0.1",
     "viem": "^2.21.0"
   }
 }

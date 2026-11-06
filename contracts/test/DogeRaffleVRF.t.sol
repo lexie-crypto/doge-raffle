@@ -22,6 +22,22 @@ contract MockCoordinator {
     }
 }
 
+contract RevertingCoordinator {
+    function requestRandomness(bytes32) external pure returns (uint256) {
+        revert("unavailable");
+    }
+}
+
+contract ReturnBombCoordinator {
+    function requestRandomness(bytes32) external pure returns (uint256) {
+        assembly {
+            let response := mload(0x40)
+            mstore(response, 1)
+            return(response, 0x10000)
+        }
+    }
+}
+
 contract DogeRaffleVRFTest is Test {
     uint256 internal constant ORACLE_SK = 0x1111111111111111111111111111111111111111111111111111111111111111;
 
@@ -60,7 +76,7 @@ contract DogeRaffleVRFTest is Test {
     function test_commitRequestsVrf() public {
         uint256 roundId = _buyAndCommit();
         assertEq(raffle.vrfRequestOf(roundId), 1);
-        assertEq(raffle.roundOfRequest(1), roundId);
+        assertEq(raffle.roundOfRequest(address(mock), 1), roundId);
     }
 
     function test_vrfCallbackSettlesDraw_noBounty() public {
@@ -115,7 +131,7 @@ contract DogeRaffleVRFTest is Test {
 
         // late VRF response is now rejected (and the coordinator would
         // swallow this revert in its best-effort callback)
-        vm.expectRevert(DogeRaffle.StaleVrfResponse.selector);
+        vm.expectRevert(DogeRaffle.OnlyCoordinator.selector);
         mock.deliver(1, 999);
     }
 
@@ -128,7 +144,7 @@ contract DogeRaffleVRFTest is Test {
         raffle.finalizeDraw();
 
         uint256 escrow = raffle.prizeOf(roundId).amount;
-        vm.expectRevert(DogeRaffle.StaleVrfResponse.selector);
+        vm.expectRevert(DogeRaffle.OnlyCoordinator.selector);
         mock.deliver(1, 123);
         assertEq(raffle.prizeOf(roundId).amount, escrow, "settlement immutable");
     }
@@ -138,7 +154,7 @@ contract DogeRaffleVRFTest is Test {
         mock.deliver(1, 7); // settles r1, opens r2
         assertEq(raffle.currentRoundId(), r1 + 1);
         // replaying r1's request id must fail
-        vm.expectRevert(DogeRaffle.StaleVrfResponse.selector);
+        vm.expectRevert(DogeRaffle.OnlyCoordinator.selector);
         mock.deliver(1, 8);
     }
 
@@ -156,10 +172,67 @@ contract DogeRaffleVRFTest is Test {
         assertEq(winner, alice);
     }
 
+    function test_revertingCoordinatorCannotBlockCommitOrFallback() public {
+        RevertingCoordinator broken = new RevertingCoordinator();
+        vm.prank(owner);
+        raffle.setVrfCoordinator(address(broken));
+        uint256 roundId = _buyAndCommit();
+        assertEq(raffle.vrfRequestOf(roundId), 0);
+        (,, uint64 rb,,,,,,) = raffle.rounds(roundId);
+        vm.roll(uint256(rb) + 1);
+        assertTrue(raffle.canFinalize());
+        raffle.finalizeDraw();
+        assertEq(raffle.prizeOf(roundId).amount, 18 ether);
+    }
+
+    function test_coordinatorWithoutCodeCannotBlockCommit() public {
+        vm.prank(owner);
+        raffle.setVrfCoordinator(makeAddr("missing coordinator"));
+        uint256 roundId = _buyAndCommit();
+        assertEq(raffle.vrfRequestOf(roundId), 0);
+        (,, uint64 rb,,,,,,) = raffle.rounds(roundId);
+        vm.roll(uint256(rb) + 1);
+        raffle.finalizeDraw();
+        assertEq(raffle.prizeOf(roundId).amount, 18 ether);
+    }
+
+    function test_largeCoordinatorResponseCannotBlockCommit() public {
+        ReturnBombCoordinator broken = new ReturnBombCoordinator();
+        vm.prank(owner);
+        raffle.setVrfCoordinator(address(broken));
+        uint256 roundId = _buyAndCommit();
+        assertEq(raffle.vrfRequestOf(roundId), 0);
+        (,, uint64 rb,,,,,,) = raffle.rounds(roundId);
+        vm.roll(uint256(rb) + 1);
+        raffle.finalizeDraw();
+        assertEq(raffle.prizeOf(roundId).amount, 18 ether);
+    }
+
+    function test_committedCoordinatorAndTimeoutRemainPinned() public {
+        uint256 roundId = _buyAndCommit();
+        assertEq(raffle.vrfCoordinatorOf(roundId), address(mock));
+        assertEq(raffle.vrfTimeoutOf(roundId), 6 hours);
+
+        vm.startPrank(owner);
+        raffle.setVrfCoordinator(address(new MockCoordinator()));
+        raffle.setVrfTimeout(1 days);
+        vm.stopPrank();
+        assertEq(raffle.vrfTimeoutOf(roundId), 6 hours);
+
+        mock.deliver(1, 7);
+        assertEq(raffle.prizeOf(roundId).amount, 18 ether);
+    }
+
     function test_timeoutFloorEnforced() public {
         vm.prank(owner);
         vm.expectRevert(DogeRaffle.TimeoutTooShort.selector);
         raffle.setVrfTimeout(9 minutes);
+    }
+
+    function test_timeoutCeilingEnforced() public {
+        vm.prank(owner);
+        vm.expectRevert(DogeRaffle.TimeoutTooLong.selector);
+        raffle.setVrfTimeout(1 days + 1);
     }
 
     // ------------------------------------- full end-to-end with real proofs

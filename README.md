@@ -6,6 +6,8 @@ A recurring DOGE raffle dApp on **DogeOS** (the EVM ZK-rollup app layer for Doge
 > - DogeRaffle: [`0x0B0024090b1a2BD99128654E0047BB27fE30D05C`](https://dogeos-testnet.l2scan.co/address/0x0B0024090b1a2BD99128654E0047BB27fE30D05C)
 > - DogeVRFCoordinator: [`0x4463AF4EAccFFB4AC14e87e9dac09B59e9E3614c`](https://dogeos-testnet.l2scan.co/address/0x4463AF4EAccFFB4AC14e87e9dac09B59e9E3614c)
 
+> **Deployment note:** Source changes do not alter these immutable testnet contracts. Redeploy and update the site, bot, and workflow addresses before treating the fixes below as live. Let existing claims settle before migrating.
+
 > **Status: DogeOS Chikyū testnet only.** DogeOS mainnet has not launched; when it does, deployment is a config change (new RPC/chain id). **Real-value launch is additionally blocked on the randomness trust model below.**
 
 ## Layout
@@ -20,10 +22,10 @@ A recurring DOGE raffle dApp on **DogeOS** (the EVM ZK-rollup app layer for Doge
 
 1. **Buy tickets** — `buyTickets(bundleId)` with the exact DOGE value. Default bundles (owner-configurable via `setBundles`): 1 ticket = 20 DOGE, 5 = 90, 10 = 170. Tickets are numbered 0…N−1 per round and stored as cumulative ranges, so a 10,000-ticket purchase costs the same gas/storage as 1. Every purchase emits `TicketsPurchased(round, buyer, bundle, firstTicket, tickets, paid)`, and `entryAt(round, i)` exposes each purchase's buyer and ticket range, so anyone can audit who held which numbers.
 2. **Draw on the 1st of every month, permissionless** — DogeOS has no keeper network, so instead of a privileged cron, *anyone* can trigger the draw once the round ends and earn a 1 DOGE bounty (paid from the fee, never from the prize):
-   - `commitDraw()` settles the prior round's expired prize into the jackpot (exactly once), closes sales, and pins a block ~10 blocks ahead; a late draw self-heals — the next round still ends on the following 1st;
+   - `commitDraw()` settles the prior round's expired prize into the jackpot (exactly once), closes sales, and pins a block ~10 blocks ahead; a late draw reopens on a calendar schedule, skipping one boundary if needed for the seven-day claim window;
    - `finalizeDraw()` derives the winning ticket number (randomness mod total tickets; stored in `winningTicketOf(round)` and emitted in `WinnerDrawn`), **escrows** the prize as a claim, pays the treasury (protocol fee − bounty), the Dogecoin Foundation wallet (foundation fee) and the caller (bounty), then opens the next round.
-   - The `bot/` workflow is a backstop that calls these if nobody else does. Because draws are calendar-fixed (1st of the month, 00:00 UTC), it runs exactly twice a month: once at the draw and a backup six hours later that exits in seconds if the draw already happened. GitHub cron is best-effort; eventual execution is guaranteed only while a funded bot or any independent caller submits transactions.
-3. **Winner claims, and pays gas** — the prize is never pushed. `claimPrize(roundId)` is winner-only, one-time, and valid **strictly before the claim cutoff**: the next round's scheduled end time, fixed the moment that round opens. The schedule is fixed in code (next calendar-month boundary), so nothing can move an existing cutoff. A claim whose transfer fails reverts — the claim is never burned.
+   - The `bot/` workflow is a backstop that checks every six hours. It commits due rounds, lets the VRF responder run, and retries a silent VRF round after its timeout. Runs outside the draw window exit without a transaction. GitHub cron is best-effort; eventual execution still requires a funded bot or an independent caller.
+3. **Winner claims, and pays gas** — the prize is never pushed. `claimPrize(roundId)` is winner-only, one-time, and valid **strictly before the claim cutoff**: the next round's scheduled end time, fixed the moment that round opens. If a late draw would leave less than seven days, the next round skips a month boundary to protect the claim window. A claim whose transfer fails reverts without burning it; a contract winner that rejects native DOGE may call `claimPrizeTo(roundId, recipient)` to choose a payable recipient.
 4. **Unclaimed prizes roll** — at the next round's commit, an expired prize is extinguished and added to that round's gross pot, exactly once. Previously claimed amounts never roll. If a round has no tickets, no winner is drawn, no fee is charged, and the carried jackpot survives (through any number of empty rounds) until a ticketed draw happens.
 5. **Fees — 5% protocol, 5% Dogecoin Foundation, 90% winner** — each round snapshots both `feeBps` (protocol treasury) and `foundationBps` (Dogecoin Foundation wallet, set via `setFoundationWallet`) when it opens, so the owner cannot re-fee an active pot. Each is hard-capped at 10%. Both apply to the **full gross pot — new ticket revenue plus rollover** (rolled funds are deliberately charged again); the finalizer bounty comes out of the protocol fee only. Exact example:
 
@@ -38,7 +40,7 @@ A recurring DOGE raffle dApp on **DogeOS** (the EVM ZK-rollup app layer for Doge
    | Treasury net receipt | 49.00 | 94.00 |
    | **Winner claimable (90%)** | **900.00** | **1,710.00** |
 
-6. **Fail-closed** — `pause()` stops ticket **sales only**; draws, claims and withdrawals can never be paused. Failed treasury/bounty pushes credit a pull-based `withdrawable` balance. The owner can never sweep the pot, an awarded claim, or anyone's balance. Value conservation (every wei of tickets = claims + rollover + fee + bounty) is enforced by tests at wei precision.
+6. **Fail-closed** — `pause()` stops ticket **sales only**; draws, claims and withdrawals can never be paused. Failed treasury/bounty pushes credit a pull-based `withdrawable` balance; the recipient can use `withdrawPayoutTo(recipient)` if it rejects native DOGE. `reservedDoge` tracks all ticket revenue still owed, so the owner can recover only excess DOGE forced into the contract outside `buyTickets()`, never the pot, an awarded claim, or anyone's balance. Value conservation is enforced by tests at wei precision.
 
 ### Randomness: self-operated VRF with blockhash fallback
 
@@ -46,10 +48,10 @@ Chainlink VRF does not support DogeOS, so this repo ships its own VRF service �
 
 - **`contracts/src/vrf/DogeVRFCoordinator.sol`** — Chainlink-style request/fulfill coordinator. Proofs are verified **on-chain** against the registered oracle public key using Chainlink's MIT-licensed secp256k1 ECVRF verifier (vendored unmodified at `contracts/src/vrf/vendor/VRF.sol`, from `smartcontractkit/chainlink` tag `contracts-v1.3.0`). Neither the oracle nor the sequencer can forge or bias an output; anyone can re-verify every fulfillment.
 - **`bot/ecvrf.mjs`** — the off-chain prover (mirrors the verifier byte-for-byte; proven compatible by Foundry ffi tests that verify JS-generated proofs on-chain). **`bot/vrf-oracle.mjs`** scans for requests and fulfills them on the draw-bot cron.
-- **Raffle integration** — `commitDraw()` requests randomness (the raffle is fee-exempt); the coordinator's verified callback settles the draw. If the oracle stays silent past `vrfTimeout` (default 6h), the permissionless **blockhash fallback** settles instead — so a withholding oracle can delay a draw but never abort or redirect it, and the delay is publicly visible on-chain. With no coordinator set the blockhash path runs alone (bootstrap mode; `PREVRANDAO` returns 0 on DogeOS, hence commit + future-blockhash).
+- **Raffle integration** — `commitDraw()` requests randomness (the raffle should be fee-exempt); the coordinator's verified callback settles the draw. A failed request commits in fallback-only mode instead of freezing the round. A successful request pins its coordinator and timeout for that round. If the oracle stays silent past `vrfTimeout` (default 6h, maximum 24h), the permissionless **blockhash fallback** becomes available. With no coordinator set the blockhash path runs alone (bootstrap mode; `PREVRANDAO` returns 0 on DogeOS, hence commit + future-blockhash).
 - **Monetization** — the coordinator charges a per-request fee in native DOGE (default 2 DOGE, owner-settable) to any third-party DogeOS dApp that wants verifiable randomness; fees accrue to the owner. House consumers are whitelisted fee-exempt.
 
-**Running the VRF for third parties.** `bot/vrf-oracle.mjs` finds pending requests by walking request ids (DogeOS RPCs cap log queries at 10,000 blocks, ids need no range). The monthly GitHub workflow runs it once per draw, which is enough for the raffle. For other dApps, responses must arrive in seconds, so run it in watch mode on any always-on host (a small VPS, Railway, Fly, etc.):
+**Running the VRF for third parties.** `bot/vrf-oracle.mjs` finds pending requests by walking request ids (DogeOS RPCs cap log queries at 10,000 blocks, ids need no range). Cron mode scans all request ids in bounded pages; watch mode rotates through them, so old paid requests do not fall outside a fixed lookback window. The GitHub workflow runs it after a draw commit. For other dApps, responses must arrive in seconds, so run it in watch mode on an always-on host (a small VPS, Railway, Fly, etc.):
 
 ```bash
 cd bot && npm install
@@ -62,14 +64,14 @@ Alternatively, on an Ubuntu server (e.g. a Google Cloud e2-micro), `scripts/buil
 
 Developer-facing docs live on the site at `/docs` (product page at `/vrf`). The code samples there are copied at build time from `contracts/src/examples/DiceRoller.sol` (tested end-to-end with real proofs in `contracts/test/DiceRoller.t.sol`) and `bot/examples/request-randomness.mjs` (run end-to-end on testnet), so they can't drift from tested code.
 
-**Residual trust, stated plainly:** VRF outputs are unforgeable, but the key holder sees an output before posting and could *withhold* it, steering the round to the (also unpredictable) blockhash fallback; the fallback itself carries sequencer-influence and timing caveats. This is a major upgrade over blockhash-only, but **real-value launch still requires a reviewed randomness design** (e.g. key management, fallback policy) **and legal clearance.** Keep the VRF secret key offline-backed and separate from the gas wallet.
+**Residual trust, stated plainly:** VRF outputs are unforgeable, but the key holder sees an output before posting and could *withhold* it, steering the round to the blockhash fallback. If no independent caller finalizes a fallback before the 256-block hash window expires, a participant can discard that known outcome and re-pin a new block. The sequencer may also influence blockhash timing. **This is not a safe randomness design for real-value raffles.** Real-value launch requires an independently reviewed randomness design and legal clearance. Keep the VRF secret key offline-backed and separate from the gas wallet.
 
 ## Development
 
 ```bash
 # contracts (requires Foundry: https://getfoundry.sh)
 cd contracts
-forge test          # 37 tests: claims, rollover, boundary races, exact fee
+forge test          # claims, rollover, boundary races, exact fee
                     # arithmetic, fuzz conservation, fairness, reentrancy
 
 # frontend
@@ -106,7 +108,7 @@ Then set the repo's Actions config (Settings → Secrets and variables → Actio
 | Secret | `BOT_PRIVATE_KEY` | hot wallet: pays draw gas, fulfills VRF, and holds the on-chain `walletAdmin` role |
 | Secret | `VRF_SECRET_KEY` | ECVRF oracle key (keep an offline copy; rotate with `setOracleKey`) |
 
-**Payout addresses are configurable anytime.** The contract stores `treasury` and `foundationWallet`; the `sync-wallets` workflow (run it manually after editing the two variables — it also runs before every draw) reads `TREASURY_ADDRESS` / `FOUNDATION_ADDRESS`, compares with the chain, and applies any change. It signs with the bot key, which holds the `walletAdmin` role: a deliberately narrow permission that can change **only** these two addresses — not fees, pots, claims, pausing or VRF wiring. The owner can also change them directly from the explorer and can revoke the role with `setWalletAdmin(0x0)`.
+**Payout addresses are configurable anytime.** The contract stores `treasury` and `foundationWallet`; the `sync-wallets` workflow (run it manually after editing the two variables — it also runs before every draw) reads `TREASURY_ADDRESS` / `FOUNDATION_ADDRESS`, compares with the chain, and applies any change. A sync failure is reported but does not block a due draw; verify the on-chain recipients after changing variables. It signs with the bot key, which holds the `walletAdmin` role: a deliberately narrow permission that can change **only** these two addresses — not fees, pots, claims, pausing or VRF wiring. The owner can also change them directly from the explorer and can revoke the role with `setWalletAdmin(0x0)`.
 
 ## Credits
 
