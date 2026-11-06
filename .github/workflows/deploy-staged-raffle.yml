@@ -1,0 +1,35 @@
+name: deploy-staged-raffle
+
+# Manual only. Deploys v2 alongside the funded legacy contract; does not
+# change the website or keeper addresses while legacy tickets/claims exist.
+on:
+  workflow_dispatch: {}
+
+permissions:
+  contents: read
+
+jobs:
+  deploy:
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    steps:
+      - uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683 # v4.2.2
+        with:
+          persist-credentials: false
+          submodules: true
+      - uses: foundry-rs/foundry-toolchain@b00af27efadbc7b4ca8b82abbd903b17cc874d2a # v1.9.0
+        with:
+          version: v1.9.0
+      - name: Check deployment settings
+        env:
+          DEPLOYER_PRIVATE_KEY: ${{ secrets.DEPLOYER_PRIVATE_KEY }}
+          LEGACY_RAFFLE_ADDRESS: ${{ vars.RAFFLE_ADDRESS }}
+        run: |
+          test -n "$DEPLOYER_PRIVATE_KEY" || { echo '::error::Set DEPLOYER_PRIVATE_KEY as a repository secret'; exit 1; }
+          test -n "$LEGACY_RAFFLE_ADDRESS" || { echo '::error::Set RAFFLE_ADDRESS to the current legacy raffle'; exit 1; }
+      - name: Deploy and wire staged raffle
+        working-directory: contracts
+        env:
+          DEPLOYER_PRIVATE_KEY: ${{ secrets.DEPLOYER_PRIVATE_KEY }}
+          LEGACY_RAFFLE_ADDRESS: ${{ vars.RAFFLE_ADDRESS }}
+        run: forge script script/DeployRaffleV2.s.sol:DeployRaffleV2 --rpc-url dogeos_testnet --broadcast --slow

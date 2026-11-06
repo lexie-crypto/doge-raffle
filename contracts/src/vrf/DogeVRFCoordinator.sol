@@ -19,7 +19,8 @@ import {IVRFConsumer} from "./IVRFConsumer.sol";
 /// Trust model: outputs are unforgeable, but the key holder sees the output
 /// before posting and could WITHHOLD a response. Consumers must implement
 /// their own liveness fallback (e.g. DogeRaffle falls back to its blockhash
-/// path after a timeout), which makes withholding observable and profitless.
+/// path after a timeout). Withholding remains a source of outcome bias;
+/// neither this VRF nor the blockhash fallback is safe for real-value raffles.
 ///
 /// Monetization: per-request fee in DOGE, accrued in the contract and
 /// withdrawable by the owner. House consumers can be whitelisted fee-exempt.
