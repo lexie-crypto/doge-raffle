@@ -12,6 +12,7 @@ import {
 } from "wagmi";
 import { PrizeStatus, raffleAbi } from "@/lib/abi";
 import { RAFFLE_ADDRESS, dogeosChikyu } from "@/lib/chain";
+import { CoinRain, DogeCoin, DogeOSBadge, DogeTicker, WowWords } from "./doge";
 
 const raffle = { address: RAFFLE_ADDRESS, abi: raffleAbi } as const;
 
@@ -214,17 +215,29 @@ export default function Home() {
   }
 
   return (
-    <main className="mx-auto max-w-3xl px-4 py-10">
-      <header className="mb-10 flex items-center justify-between">
-        <div>
-          <h1 className="text-3xl font-bold tracking-tight">🐕 Doge Raffle</h1>
-          <p className="text-sm text-zinc-400">
-            DogeOS Chikyū testnet · a winner every 30 days ·{" "}
-            {Number(roundFeeBps) / 100}% protocol fee
-          </p>
+    <main className="relative mx-auto max-w-3xl px-4 py-10">
+      <WowWords />
+      <CoinRain />
+
+      <header className="relative z-10 mb-6 flex flex-wrap items-center justify-between gap-4">
+        <div className="flex items-center gap-4">
+          <DogeCoin size={72} spin />
+          <div>
+            <h1 className="doge-speak bg-gradient-to-r from-amber-300 via-yellow-400 to-amber-500 bg-clip-text text-4xl font-black tracking-tight text-transparent">
+              DOGE RAFFLE
+            </h1>
+            <p className="doge-speak text-sm font-bold text-amber-400/90">
+              much jackpot · very 30 days · wow {Number(roundFeeBps) / 100}% fee
+            </p>
+          </div>
         </div>
-        <ConnectButton chainStatus="icon" showBalance={false} />
+        <div className="flex flex-col items-end gap-2">
+          <ConnectButton chainStatus="icon" showBalance={false} />
+          <DogeOSBadge />
+        </div>
       </header>
+
+      <DogeTicker />
 
       {!deployed && (
         <div className="mb-8 rounded-lg border border-amber-700 bg-amber-950/40 p-4 text-amber-300">
@@ -236,9 +249,10 @@ export default function Home() {
 
       {/* Winner claim card */}
       {myClaim && (
-        <section className="mb-8 rounded-2xl border border-amber-500 bg-amber-950/40 p-6">
-          <h2 className="text-2xl font-bold text-amber-300">
-            🏆 You won round {myClaim.roundId.toString()}!
+        <section className="relative z-10 mb-8 rounded-2xl border-4 border-dashed border-amber-400 bg-amber-950/60 p-6">
+          <h2 className="doge-speak text-3xl font-black text-amber-300">
+            <span className="wiggle">🐕</span> WOW. YOU WIN ROUND{" "}
+            {myClaim.roundId.toString()}. SUCH LUCK.
           </h2>
           <p className="mt-1 text-lg">
             <b>{fmt(myClaim.amount)} DOGE</b> is yours — claim it before the
@@ -258,9 +272,9 @@ export default function Home() {
               })
             }
             disabled={isPending || txConfirming}
-            className="mt-4 rounded-lg bg-amber-500 px-6 py-3 text-lg font-bold text-zinc-950 hover:bg-amber-400 disabled:opacity-40"
+            className="doge-btn doge-speak mt-4 rounded-xl bg-amber-500 px-6 py-3 text-xl font-black text-zinc-950 hover:bg-amber-400 disabled:opacity-40"
           >
-            Claim {fmt(myClaim.amount)} DOGE
+            🚀 CLAIM {fmt(myClaim.amount)} DOGE WOW
           </button>
           <p className="mt-2 text-xs text-amber-200/70">
             Sent from your wallet — you pay the (tiny) gas.
@@ -269,12 +283,15 @@ export default function Home() {
       )}
 
       {/* Current round */}
-      <section className="mb-8 rounded-2xl border border-zinc-800 bg-zinc-900 p-6">
-        <div className="mb-1 text-sm uppercase tracking-wide text-zinc-500">
-          Round {roundId?.toString() ?? "…"} — guaranteed pot
+      <section className="relative z-10 mb-8 overflow-hidden rounded-2xl border-2 border-amber-600/50 bg-zinc-900 p-6">
+        <div className="absolute -right-6 -top-6 opacity-20">
+          <DogeCoin size={140} />
         </div>
-        <div className="text-5xl font-bold text-amber-400">
-          {fmt(gPot)} <span className="text-2xl text-zinc-400">DOGE</span>
+        <div className="doge-speak mb-1 text-sm font-bold uppercase tracking-wide text-amber-500/80">
+          round {roundId?.toString() ?? "…"} — such guaranteed pot
+        </div>
+        <div className="pot-glow doge-speak text-6xl font-black text-amber-400">
+          {fmt(gPot)} <span className="text-2xl text-amber-200/70">DOGE</span>
         </div>
         <div className="mt-2 text-sm text-zinc-400">
           Winner takes {fmt(guaranteedPrize)} DOGE after the{" "}
@@ -299,7 +316,7 @@ export default function Home() {
           </div>
         )}
         <div className="mt-4 text-lg">
-          ⏳ Next draw in:{" "}
+          <span className="doge-speak font-bold text-amber-300">⏳ much wait until draw:</span>{" "}
           <Countdown
             endTime={endTime}
             doneText="Draw pending — anyone can trigger it"
@@ -307,46 +324,63 @@ export default function Home() {
         </div>
         {isConnected && (
           <div className="mt-3 text-sm text-zinc-300">
-            You hold <b>{myTickets?.toString() ?? "0"}</b> tickets
-            {odds ? ` — ${odds}% chance of winning` : ""}
+            <span className="wiggle">🐶</span> You hold{" "}
+            <b>{myTickets?.toString() ?? "0"}</b> tickets
+            {odds ? (
+              <>
+                {" "}
+                — <span className="doge-speak font-bold text-amber-300">{odds}% such odds</span>
+              </>
+            ) : (
+              ""
+            )}
           </div>
         )}
       </section>
 
       {/* Buy */}
-      <section className="mb-8">
-        <h2 className="mb-3 text-xl font-semibold">Buy tickets</h2>
+      <section className="relative z-10 mb-8">
+        <h2 className="doge-speak mb-3 text-2xl font-black text-amber-300">
+          🎟️ buy tickets. very easy. wow.
+        </h2>
         <div className="grid grid-cols-1 gap-3 sm:grid-cols-3">
-          {(bundles ?? []).map((b, i) => (
-            <button
-              key={i}
-              disabled={!isConnected || !deployed || isPending || txConfirming}
-              onClick={() =>
-                writeContract({
-                  ...raffle,
-                  functionName: "buyTickets",
-                  args: [BigInt(i)],
-                  value: b.price,
-                  chainId: dogeosChikyu.id,
-                })
-              }
-              className="rounded-xl border border-zinc-700 bg-zinc-900 p-5 text-left transition hover:border-amber-500 disabled:cursor-not-allowed disabled:opacity-40"
-            >
-              <div className="text-2xl font-bold">
-                {b.tickets} ticket{b.tickets > 1 ? "s" : ""}
-              </div>
-              <div className="text-amber-400">{fmt(b.price, 0)} DOGE</div>
-              {b.tickets > 1 && (
-                <div className="mt-1 text-xs text-zinc-500">
-                  {fmt(b.price / BigInt(b.tickets), 1)} DOGE each
+          {(bundles ?? []).map((b, i) => {
+            const dogeSpeak = ["such starter", "much value", "very whale 🐋"][i] ?? "wow";
+            return (
+              <button
+                key={i}
+                disabled={!isConnected || !deployed || isPending || txConfirming}
+                onClick={() =>
+                  writeContract({
+                    ...raffle,
+                    functionName: "buyTickets",
+                    args: [BigInt(i)],
+                    value: b.price,
+                    chainId: dogeosChikyu.id,
+                  })
+                }
+                className="doge-btn rounded-xl border-2 border-amber-700/60 bg-zinc-900 p-5 text-left disabled:cursor-not-allowed disabled:opacity-40"
+              >
+                <div className="doge-speak text-xs font-bold text-amber-500/80">{dogeSpeak}</div>
+                <div className="flex items-center gap-2 text-2xl font-bold">
+                  <DogeCoin size={26} />
+                  {b.tickets} ticket{b.tickets > 1 ? "s" : ""}
                 </div>
-              )}
-            </button>
-          ))}
+                <div className="doge-speak font-black text-amber-400">
+                  {fmt(b.price, 0)} DOGE
+                </div>
+                {b.tickets > 1 && (
+                  <div className="mt-1 text-xs text-zinc-500">
+                    {fmt(b.price / BigInt(b.tickets), 1)} DOGE each — much deal
+                  </div>
+                )}
+              </button>
+            );
+          })}
         </div>
         {!isConnected && (
-          <p className="mt-2 text-sm text-zinc-500">
-            Connect a wallet to buy tickets.
+          <p className="doge-speak mt-2 text-sm font-bold text-amber-500/70">
+            connect wallet to buy. such step. very first. 🐕
           </p>
         )}
         {txHash && (
@@ -392,8 +426,10 @@ export default function Home() {
       )}
 
       {/* Past rounds */}
-      <section>
-        <h2 className="mb-3 text-xl font-semibold">Past rounds</h2>
+      <section className="relative z-10">
+        <h2 className="doge-speak mb-3 text-2xl font-black text-amber-300">
+          🏆 hall of very fame
+        </h2>
         {pastIds.length === 0 && (
           <p className="text-sm text-zinc-500">No completed rounds yet.</p>
         )}
@@ -441,7 +477,14 @@ export default function Home() {
         </ul>
       </section>
 
-      <footer className="mt-12 border-t border-zinc-800 pt-6 text-xs leading-relaxed text-zinc-500">
+      <footer className="relative z-10 mt-12 border-t border-amber-900/40 pt-6 text-xs leading-relaxed text-zinc-500">
+        <div className="mb-4 flex items-center justify-center gap-3">
+          <DogeCoin size={32} />
+          <span className="doge-speak text-base font-black text-amber-400">
+            powered by DogeOS — the Dogecoin app layer
+          </span>
+          <DogeCoin size={32} />
+        </div>
         Winners claim their own prize (and pay gas) before a fixed deadline —
         unclaimed prizes roll into the next jackpot, where the protocol fee
         applies to the full gross pot including rolled funds. Draws are
