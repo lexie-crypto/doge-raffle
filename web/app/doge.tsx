@@ -107,7 +107,7 @@ export function CoinRain({ count = 10 }: { count?: number }) {
 
 /** A little stack of coins, used on the bundle cards. */
 export function CoinStack({ coins }: { coins: number }) {
-  const shown = Math.min(coins, 5);
+  const shown = Math.min(coins, 10);
   return (
     <div className="relative h-14" style={{ width: 44 + (shown - 1) * 24 }} aria-hidden>
       {Array.from({ length: shown }, (_, i) => (
