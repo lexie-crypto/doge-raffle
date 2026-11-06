@@ -26,6 +26,8 @@ export const raffleAbi = parseAbi([
   "function entryAt(uint256 roundId, uint256 index) view returns (address buyer, uint256 firstTicket, uint256 lastTicket)",
   "function foundationWallet() view returns (address)",
   "function treasury() view returns (address)",
+  "function callerBounty() view returns (uint256)",
+  "function vrfCoordinator() view returns (address)",
   "event PrizeClaimable(uint256 indexed roundId, address indexed winner, uint256 amount, uint64 claimCutoff)",
   "event PrizeClaimed(uint256 indexed roundId, address indexed winner, uint256 amount)",
   "event PrizeRolledOver(uint256 indexed roundId, uint256 amount, uint256 indexed intoRoundId)",

@@ -1,58 +1,141 @@
 @import "tailwindcss";
 
-/* Bright, playful doge theme — white with doge-gold accents */
+/* ===================== Doge Raffle theme ===================== */
 
-body {
-  background: #fffdf7;
-  color: #2d2415;
-  font-family:
-    ui-sans-serif,
-    system-ui,
-    -apple-system,
-    "Segoe UI",
-    Roboto,
-    Arial,
-    sans-serif;
-  /* soft sunny glow + faint Ð watermark */
-  background-image: radial-gradient(
-      ellipse 90% 55% at 50% -15%,
-      rgba(242, 199, 68, 0.22),
-      transparent
-    ),
-    url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' width='180' height='180'%3E%3Ctext x='40' y='100' font-size='52' fill='%23d9960b' opacity='0.04' font-family='serif' font-weight='bold'%3E%C3%90%3C/text%3E%3C/svg%3E");
+:root {
+  --doge-gold: #c2a633; /* Dogecoin brand gold */
+  --doge-gold-2: #e1b303;
+  --doge-cream: #fdf6e3;
+  --doge-ink: #3b2a0b;
 }
 
-/* rounded display font for headings (loaded in layout.tsx) */
+html {
+  scroll-behavior: smooth;
+}
+
+body {
+  background-color: var(--doge-cream);
+  color: var(--doge-ink);
+  font-family: ui-sans-serif, system-ui, -apple-system, "Segoe UI", Roboto, Arial, sans-serif;
+  /* paw prints, like the Dogecoin paper wallet */
+  background-image: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' width='140' height='140' viewBox='0 0 140 140'%3E%3Cg fill='%23c2a633' opacity='0.09'%3E%3Cg transform='translate(28 30) rotate(-18)'%3E%3Cellipse cx='0' cy='10' rx='9' ry='8'/%3E%3Cellipse cx='-10' cy='-3' rx='3.6' ry='4.6'/%3E%3Cellipse cx='-3.5' cy='-8' rx='3.6' ry='4.6'/%3E%3Cellipse cx='4' cy='-8' rx='3.6' ry='4.6'/%3E%3Cellipse cx='10.5' cy='-3' rx='3.6' ry='4.6'/%3E%3C/g%3E%3Cg transform='translate(100 98) rotate(22)'%3E%3Cellipse cx='0' cy='10' rx='9' ry='8'/%3E%3Cellipse cx='-10' cy='-3' rx='3.6' ry='4.6'/%3E%3Cellipse cx='-3.5' cy='-8' rx='3.6' ry='4.6'/%3E%3Cellipse cx='4' cy='-8' rx='3.6' ry='4.6'/%3E%3Cellipse cx='10.5' cy='-3' rx='3.6' ry='4.6'/%3E%3C/g%3E%3C/g%3E%3C/svg%3E");
+}
+
 .display {
   font-family: var(--font-display), ui-rounded, "Segoe UI", system-ui, sans-serif;
 }
 
-/* shiny pot number */
-.pot-glow {
-  text-shadow: 0 2px 0 rgba(217, 150, 11, 0.25);
+/* gold metallic text */
+.gold-text {
+  background: linear-gradient(180deg, #f7d660 0%, #e1b303 45%, #b8860b 100%);
+  -webkit-background-clip: text;
+  background-clip: text;
+  color: transparent;
 }
 
-/* bouncy lift on buttons/cards */
+.gold-shadow {
+  filter: drop-shadow(0 3px 0 rgba(139, 101, 8, 0.35));
+}
+
+/* ------------------------------------------------ animations */
+
+@keyframes float {
+  0%, 100% { transform: translateY(0) rotate(-2deg); }
+  50% { transform: translateY(-14px) rotate(2deg); }
+}
+.float { animation: float 5s ease-in-out infinite; }
+
+@keyframes bob {
+  0%, 100% { transform: translateY(0); }
+  50% { transform: translateY(-6px); }
+}
+.bob { animation: bob 3s ease-in-out infinite; }
+
+@keyframes spin-slow { to { transform: rotate(360deg); } }
+.rays { animation: spin-slow 40s linear infinite; }
+
+@keyframes orbit {
+  from { transform: rotate(0deg) translateX(var(--r)) rotate(0deg); }
+  to { transform: rotate(360deg) translateX(var(--r)) rotate(-360deg); }
+}
+.orbit { animation: orbit var(--d, 14s) linear infinite; }
+
+@keyframes coinFall {
+  0% { transform: translateY(-15vh) rotate(0deg); opacity: 0; }
+  10% { opacity: 0.9; }
+  90% { opacity: 0.9; }
+  100% { transform: translateY(105vh) rotate(540deg); opacity: 0; }
+}
+.coin-fall {
+  position: absolute;
+  top: 0;
+  pointer-events: none;
+  animation: coinFall linear infinite;
+}
+
+@keyframes coinFlip {
+  0%, 100% { transform: rotateY(0deg); }
+  50% { transform: rotateY(180deg); }
+}
+.coin-flip { animation: coinFlip 3.2s ease-in-out infinite; }
+
+@keyframes marquee {
+  from { transform: translateX(0); }
+  to { transform: translateX(-50%); }
+}
+.marquee-track {
+  display: inline-flex;
+  white-space: nowrap;
+  animation: marquee 35s linear infinite;
+}
+
+@keyframes pulseGlow {
+  0%, 100% { box-shadow: 0 0 0 0 rgba(225, 179, 3, 0.55); }
+  50% { box-shadow: 0 0 0 14px rgba(225, 179, 3, 0); }
+}
+.pulse-glow { animation: pulseGlow 2.2s ease-out infinite; }
+
+@media (prefers-reduced-motion: reduce) {
+  .float, .bob, .rays, .orbit, .coin-fall, .coin-flip, .marquee-track, .pulse-glow {
+    animation: none !important;
+  }
+  .coin-fall { display: none; }
+}
+
+/* ------------------------------------------------ components */
+
 .doge-btn {
-  transition:
-    transform 0.12s ease,
-    box-shadow 0.12s ease;
+  transition: transform 0.12s ease, box-shadow 0.12s ease, background-color 0.12s ease;
 }
 .doge-btn:hover:not(:disabled) {
   transform: translateY(-3px);
-  box-shadow: 0 8px 24px rgba(217, 150, 11, 0.3);
+  box-shadow: 0 10px 24px rgba(194, 166, 51, 0.35);
 }
 
-/* gentle mascot bob */
-@keyframes bob {
-  0%,
-  100% {
-    transform: translateY(0);
-  }
-  50% {
-    transform: translateY(-6px);
-  }
+/* raffle-ticket card: notched sides + perforation line */
+.ticket {
+  position: relative;
+  background: #fff;
+  -webkit-mask:
+    radial-gradient(circle 14px at 0 62%, transparent 98%, #000) left / 51% 100% no-repeat,
+    radial-gradient(circle 14px at 100% 62%, transparent 98%, #000) right / 51% 100% no-repeat;
+  mask:
+    radial-gradient(circle 14px at 0 62%, transparent 98%, #000) left / 51% 100% no-repeat,
+    radial-gradient(circle 14px at 100% 62%, transparent 98%, #000) right / 51% 100% no-repeat;
 }
-.bob {
-  animation: bob 3s ease-in-out infinite;
+.ticket-perf {
+  border-top: 2px dashed rgba(194, 166, 51, 0.45);
+}
+
+.gold-card {
+  background: linear-gradient(145deg, #fff8dc 0%, #ffe9a3 55%, #f7d26a 100%);
+}
+
+/* stacked bar segment stripes */
+.stripes {
+  background-image: repeating-linear-gradient(
+    -45deg,
+    rgba(255, 255, 255, 0.18) 0 8px,
+    transparent 8px 16px
+  );
 }

@@ -5,6 +5,8 @@ import { formatEther } from "viem";
 import { useAccount, useReadContract, useReadContracts } from "wagmi";
 import { PrizeStatus, raffleAbi } from "@/lib/abi";
 import { RAFFLE_ADDRESS, dogeosChikyu } from "@/lib/chain";
+import { DogeCoin } from "./doge";
+import { SectionHeading } from "./sections";
 
 const raffle = { address: RAFFLE_ADDRESS, abi: raffleAbi } as const;
 const ZERO = BigInt(0);
@@ -132,21 +134,25 @@ export function MyTickets({
 
   if (!isConnected) {
     return (
-      <section className="relative z-10 mb-8 rounded-3xl border-2 border-dashed border-amber-200 bg-white/60 p-6 text-center">
-        <h2 className="display text-2xl font-bold text-amber-950">My tickets</h2>
-        <p className="mt-1 text-sm text-stone-500">
-          Connect any EVM wallet to see your ticket numbers, past rounds and
-          results — your wallet is your account, nothing to sign up for.
-        </p>
-      </section>
+      <div>
+        <SectionHeading kicker="Your account" title="My tickets" />
+        <div className="mx-auto flex max-w-xl flex-col items-center rounded-3xl border-2 border-dashed border-amber-300 bg-white/60 p-8 text-center">
+          <DogeCoin size={64} className="bob" />
+          <p className="display mt-3 text-xl font-bold text-amber-950">Connect your wallet to see your tickets</p>
+          <p className="mt-1 text-amber-900/70">
+            Your ticket numbers, every round you entered, each draw&apos;s winning
+            ticket and whether you won. Your wallet is your account — nothing to sign up for.
+          </p>
+        </div>
+      </div>
     );
   }
 
   return (
-    <section className="relative z-10 mb-8">
-      <h2 className="display mb-3 text-2xl font-bold text-amber-950">My tickets</h2>
+    <section className="relative z-10">
+      <SectionHeading kicker="Your account" title="My tickets" />
       {tickets.length === 0 && (
-        <p className="text-sm text-stone-500">
+        <p className="text-center text-amber-900/70">
           No tickets yet for{" "}
           <span className="font-mono">
             {address?.slice(0, 6)}…{address?.slice(-4)}
@@ -154,7 +160,7 @@ export function MyTickets({
           . Buy a bundle above to enter this round.
         </p>
       )}
-      <ul className="space-y-3">
+      <ul className="mx-auto max-w-4xl space-y-3">
         {tickets.map((t, i) => {
           const round = roundMeta?.[i * 4]?.result as
             | readonly [bigint, bigint, bigint, number, number, number, bigint, bigint, string]
