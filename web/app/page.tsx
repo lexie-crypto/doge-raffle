@@ -10,14 +10,13 @@ import {
   useWaitForTransactionReceipt,
   useWriteContract,
 } from "wagmi";
-import { raffleAbi } from "@/lib/abi";
+import { PrizeStatus, raffleAbi } from "@/lib/abi";
 import { RAFFLE_ADDRESS, dogeosChikyu } from "@/lib/chain";
 
 const raffle = { address: RAFFLE_ADDRESS, abi: raffleAbi } as const;
 
 const ZERO = BigInt(0);
 const ONE = BigInt(1);
-const FEE_BPS = BigInt(500);
 const BPS = BigInt(10_000);
 
 function fmt(wei: bigint, digits = 2) {
@@ -26,7 +25,14 @@ function fmt(wei: bigint, digits = 2) {
   });
 }
 
-function Countdown({ endTime }: { endTime: bigint }) {
+/** Live countdown to a unix-seconds deadline. */
+function Countdown({
+  endTime,
+  doneText,
+}: {
+  endTime: bigint;
+  doneText: string;
+}) {
   // null until mounted — Date.now() must not run during prerender
   const [now, setNow] = useState<number | null>(null);
   useEffect(() => {
@@ -36,8 +42,7 @@ function Countdown({ endTime }: { endTime: bigint }) {
   }, []);
   if (now === null) return <span>…</span>;
   const left = Math.max(0, Number(endTime) - now);
-  if (left === 0)
-    return <span className="text-amber-400">Draw pending — anyone can trigger it</span>;
+  if (left === 0) return <span className="text-amber-400">{doneText}</span>;
   const d = Math.floor(left / 86400);
   const h = Math.floor((left % 86400) / 3600);
   const m = Math.floor((left % 3600) / 60);
@@ -49,8 +54,19 @@ function Countdown({ endTime }: { endTime: bigint }) {
   );
 }
 
+function useNowSec() {
+  const [now, setNow] = useState<number | null>(null);
+  useEffect(() => {
+    setNow(Math.floor(Date.now() / 1000));
+    const t = setInterval(() => setNow(Math.floor(Date.now() / 1000)), 5000);
+    return () => clearInterval(t);
+  }, []);
+  return now;
+}
+
 export default function Home() {
   const { address, isConnected } = useAccount();
+  const nowSec = useNowSec();
   const { writeContract, data: txHash, isPending, error: txError } =
     useWriteContract();
   const { isLoading: txConfirming, isSuccess: txConfirmed } =
@@ -68,6 +84,18 @@ export default function Home() {
     query: { enabled: roundId !== undefined, refetchInterval: 15_000 },
   });
 
+  const { data: guaranteedPot, refetch: refetchGuaranteed } = useReadContract({
+    ...raffle,
+    functionName: "guaranteedPot",
+    query: { refetchInterval: 15_000 },
+  });
+
+  const { data: rollover, refetch: refetchRollover } = useReadContract({
+    ...raffle,
+    functionName: "pendingRollover",
+    query: { refetchInterval: 15_000 },
+  });
+
   const { data: bundles } = useReadContract({
     ...raffle,
     functionName: "allBundles",
@@ -76,30 +104,39 @@ export default function Home() {
   const { data: myTickets, refetch: refetchMyTickets } = useReadContract({
     ...raffle,
     functionName: "ticketsOf",
-    args:
-      roundId !== undefined && address ? [roundId, address] : undefined,
+    args: roundId !== undefined && address ? [roundId, address] : undefined,
     query: { enabled: roundId !== undefined && !!address },
   });
 
-  const { data: pending, refetch: refetchPending } = useReadContract({
+  const { data: pendingPayout, refetch: refetchPayout } = useReadContract({
     ...raffle,
     functionName: "withdrawable",
     args: address ? [address] : undefined,
     query: { enabled: !!address },
   });
 
-  // Past winners: read finished rounds directly (newest first, up to 10).
+  // Past rounds + their prizes (newest first, up to 10)
   const pastIds = useMemo(() => {
     if (roundId === undefined) return [];
     const ids: bigint[] = [];
-    for (let i = roundId - ONE; i >= ONE && ids.length < 10; i -= ONE) ids.push(i);
+    for (let i = roundId - ONE; i >= ONE && ids.length < 10; i -= ONE)
+      ids.push(i);
     return ids;
   }, [roundId]);
 
-  const { data: pastRounds } = useReadContracts({
+  const { data: pastRounds, refetch: refetchPastRounds } = useReadContracts({
     contracts: pastIds.map((id) => ({
       ...raffle,
       functionName: "rounds" as const,
+      args: [id] as const,
+    })),
+    query: { enabled: pastIds.length > 0 },
+  });
+
+  const { data: pastPrizes, refetch: refetchPastPrizes } = useReadContracts({
+    contracts: pastIds.map((id) => ({
+      ...raffle,
+      functionName: "prizeOf" as const,
       args: [id] as const,
     })),
     query: { enabled: pastIds.length > 0 },
@@ -110,31 +147,80 @@ export default function Home() {
       refetchRound();
       refetchRoundId();
       refetchMyTickets();
-      refetchPending();
+      refetchPayout();
+      refetchGuaranteed();
+      refetchRollover();
+      refetchPastRounds();
+      refetchPastPrizes();
     }
-  }, [txConfirmed, refetchRound, refetchRoundId, refetchMyTickets, refetchPending]);
+  }, [
+    txConfirmed,
+    refetchRound,
+    refetchRoundId,
+    refetchMyTickets,
+    refetchPayout,
+    refetchGuaranteed,
+    refetchRollover,
+    refetchPastRounds,
+    refetchPastPrizes,
+  ]);
 
-  const pot = round?.[5] ?? ZERO;
-  const totalTickets = round?.[4] ?? ZERO;
+  const totalTickets = round?.[5] ?? ZERO;
   const endTime = round?.[1] ?? ZERO;
-  const prizeAfterFee = pot - (pot * FEE_BPS) / BPS;
+  const roundFeeBps = BigInt(round?.[4] ?? 500);
+  const gPot = guaranteedPot ?? ZERO;
+  const guaranteedPrize = gPot - (gPot * roundFeeBps) / BPS;
   const odds =
     myTickets && totalTickets > ZERO
       ? ((Number(myTickets) / Number(totalTickets)) * 100).toFixed(1)
       : null;
 
+  // Possible (not yet settled) rollover from the prior round's unclaimed prize
+  const [rollAmount, rollCutoff, rollStillClaimable] = rollover ?? [
+    ZERO,
+    ZERO,
+    false,
+  ];
+
+  // My claimable prize: the prior round, if I won it and it's still live
+  const prevId =
+    roundId !== undefined && roundId > ONE ? roundId - ONE : undefined;
+  const prevRound = pastRounds?.[0]?.result;
+  const prevPrize = pastPrizes?.[0]?.result;
+  const myClaim =
+    address &&
+    prevId !== undefined &&
+    prevRound &&
+    prevPrize &&
+    prevRound[7]?.toLowerCase() === address.toLowerCase() &&
+    prevPrize.status === PrizeStatus.Claimable &&
+    nowSec !== null &&
+    nowSec < Number(prevPrize.claimCutoff)
+      ? { roundId: prevId, amount: prevPrize.amount, cutoff: prevPrize.claimCutoff }
+      : null;
+
   const deployed =
     RAFFLE_ADDRESS !== "0x0000000000000000000000000000000000000000";
+
+  function prizeStatusLabel(status: number, cutoff: bigint): string {
+    if (status === PrizeStatus.Claimed) return "claimed";
+    if (status === PrizeStatus.RolledOver) return "unclaimed — rolled into next jackpot";
+    if (status === PrizeStatus.Claimable) {
+      if (nowSec !== null && nowSec >= Number(cutoff))
+        return "expired — rollover pending";
+      return "claimable";
+    }
+    return "";
+  }
 
   return (
     <main className="mx-auto max-w-3xl px-4 py-10">
       <header className="mb-10 flex items-center justify-between">
         <div>
-          <h1 className="text-3xl font-bold tracking-tight">
-            🐕 Doge Raffle
-          </h1>
+          <h1 className="text-3xl font-bold tracking-tight">🐕 Doge Raffle</h1>
           <p className="text-sm text-zinc-400">
-            DogeOS Chikyū testnet · a winner every 30 days · 5% protocol fee
+            DogeOS Chikyū testnet · a winner every 30 days ·{" "}
+            {Number(roundFeeBps) / 100}% protocol fee
           </p>
         </div>
         <ConnectButton chainStatus="icon" showBalance={false} />
@@ -148,20 +234,76 @@ export default function Home() {
         </div>
       )}
 
+      {/* Winner claim card */}
+      {myClaim && (
+        <section className="mb-8 rounded-2xl border border-amber-500 bg-amber-950/40 p-6">
+          <h2 className="text-2xl font-bold text-amber-300">
+            🏆 You won round {myClaim.roundId.toString()}!
+          </h2>
+          <p className="mt-1 text-lg">
+            <b>{fmt(myClaim.amount)} DOGE</b> is yours — claim it before the
+            deadline or it rolls into the next jackpot.
+          </p>
+          <p className="mt-2 text-sm text-amber-200">
+            ⏳ Claim window closes in:{" "}
+            <Countdown endTime={myClaim.cutoff} doneText="expired" />
+          </p>
+          <button
+            onClick={() =>
+              writeContract({
+                ...raffle,
+                functionName: "claimPrize",
+                args: [myClaim.roundId],
+                chainId: dogeosChikyu.id,
+              })
+            }
+            disabled={isPending || txConfirming}
+            className="mt-4 rounded-lg bg-amber-500 px-6 py-3 text-lg font-bold text-zinc-950 hover:bg-amber-400 disabled:opacity-40"
+          >
+            Claim {fmt(myClaim.amount)} DOGE
+          </button>
+          <p className="mt-2 text-xs text-amber-200/70">
+            Sent from your wallet — you pay the (tiny) gas.
+          </p>
+        </section>
+      )}
+
       {/* Current round */}
       <section className="mb-8 rounded-2xl border border-zinc-800 bg-zinc-900 p-6">
         <div className="mb-1 text-sm uppercase tracking-wide text-zinc-500">
-          Round {roundId?.toString() ?? "…"} — current pot
+          Round {roundId?.toString() ?? "…"} — guaranteed pot
         </div>
         <div className="text-5xl font-bold text-amber-400">
-          {fmt(pot)} <span className="text-2xl text-zinc-400">DOGE</span>
+          {fmt(gPot)} <span className="text-2xl text-zinc-400">DOGE</span>
         </div>
         <div className="mt-2 text-sm text-zinc-400">
-          Winner takes {fmt(prizeAfterFee)} DOGE after the 5% fee ·{" "}
-          {totalTickets.toString()} tickets sold
+          Winner takes {fmt(guaranteedPrize)} DOGE after the{" "}
+          {Number(roundFeeBps) / 100}% fee · {totalTickets.toString()} tickets
+          sold
         </div>
+        {rollAmount > ZERO && (
+          <div className="mt-3 rounded-lg border border-zinc-700 bg-zinc-800/60 p-3 text-sm">
+            {rollStillClaimable ? (
+              <>
+                ➕ <b>Possible rollover: +{fmt(rollAmount)} DOGE</b> — joins
+                this jackpot if the previous winner doesn&apos;t claim by{" "}
+                <Countdown endTime={rollCutoff} doneText="now (pending settlement)" />
+              </>
+            ) : (
+              <>
+                ➕ <b>Rollover eligible: +{fmt(rollAmount)} DOGE</b> — the
+                previous prize expired unclaimed and joins this jackpot at the
+                draw.
+              </>
+            )}
+          </div>
+        )}
         <div className="mt-4 text-lg">
-          ⏳ Next draw in: <Countdown endTime={endTime} />
+          ⏳ Next draw in:{" "}
+          <Countdown
+            endTime={endTime}
+            doneText="Draw pending — anyone can trigger it"
+          />
         </div>
         {isConnected && (
           <div className="mt-3 text-sm text-zinc-300">
@@ -227,11 +369,11 @@ export default function Home() {
         )}
       </section>
 
-      {/* Claim fallback */}
-      {pending !== undefined && pending > ZERO && (
+      {/* Failed treasury/bounty payout fallback (rare) */}
+      {pendingPayout !== undefined && pendingPayout > ZERO && (
         <section className="mb-8 rounded-2xl border border-emerald-700 bg-emerald-950/40 p-6">
           <h2 className="text-xl font-semibold text-emerald-300">
-            🎉 You have an unclaimed payout: {fmt(pending)} DOGE
+            You have an unclaimed payout: {fmt(pendingPayout)} DOGE
           </h2>
           <button
             onClick={() =>
@@ -244,30 +386,33 @@ export default function Home() {
             disabled={isPending || txConfirming}
             className="mt-3 rounded-lg bg-emerald-600 px-5 py-2 font-semibold text-white hover:bg-emerald-500 disabled:opacity-40"
           >
-            Claim payout
+            Withdraw
           </button>
         </section>
       )}
 
-      {/* Past winners */}
+      {/* Past rounds */}
       <section>
-        <h2 className="mb-3 text-xl font-semibold">Past winners</h2>
+        <h2 className="mb-3 text-xl font-semibold">Past rounds</h2>
         {pastIds.length === 0 && (
           <p className="text-sm text-zinc-500">No completed rounds yet.</p>
         )}
         <ul className="space-y-2">
           {pastRounds?.map((r, i) => {
             if (r.status !== "success") return null;
-            const [, , , status, tickets, roundPot, winner, prize] = r.result;
+            const [, , , status, , tickets, , winner] = r.result;
+            const prize = pastPrizes?.[i]?.result;
             return (
               <li
                 key={pastIds[i].toString()}
-                className="flex items-center justify-between rounded-lg border border-zinc-800 bg-zinc-900 px-4 py-3 text-sm"
+                className="flex flex-wrap items-center justify-between gap-2 rounded-lg border border-zinc-800 bg-zinc-900 px-4 py-3 text-sm"
               >
                 <span className="text-zinc-400">
                   Round {pastIds[i].toString()}
                 </span>
-                {status === 2 && winner !== "0x0000000000000000000000000000000000000000" ? (
+                {status === 2 &&
+                winner !== "0x0000000000000000000000000000000000000000" &&
+                prize ? (
                   <>
                     <a
                       className="font-mono text-amber-400 underline"
@@ -278,14 +423,15 @@ export default function Home() {
                       {winner.slice(0, 6)}…{winner.slice(-4)}
                     </a>
                     <span>
-                      won {fmt(prize)} DOGE ({tickets.toString()} tickets,{" "}
-                      {fmt(roundPot)} pot)
+                      won {fmt(prize.amount)} DOGE ({tickets.toString()}{" "}
+                      tickets)
+                    </span>
+                    <span className="text-zinc-500">
+                      {prizeStatusLabel(prize.status, BigInt(prize.claimCutoff))}
                     </span>
                   </>
                 ) : status === 2 ? (
-                  <span className="text-zinc-500">
-                    no entries — rolled over
-                  </span>
+                  <span className="text-zinc-500">no entries — rolled over</span>
                 ) : (
                   <span className="text-zinc-500">drawing…</span>
                 )}
@@ -296,10 +442,14 @@ export default function Home() {
       </section>
 
       <footer className="mt-12 border-t border-zinc-800 pt-6 text-xs leading-relaxed text-zinc-500">
-        Draws are permissionless: once the countdown hits zero anyone can call{" "}
+        Winners claim their own prize (and pay gas) before a fixed deadline —
+        unclaimed prizes roll into the next jackpot, where the protocol fee
+        applies to the full gross pot including rolled funds. Draws are
+        permissionless: once the countdown hits zero anyone can call{" "}
         <code>commitDraw()</code> then <code>finalizeDraw()</code> and earn a 1
-        DOGE bounty. Randomness comes from a block hash pinned after sales
-        close. Testnet only — this is not an offer to gamble; paid raffles are
+        DOGE bounty from the fee. Randomness comes from a block hash pinned
+        after sales close (interim scheme — see repo for the trust model).
+        Testnet only — this is not an offer to gamble; paid raffles are
         regulated in many jurisdictions.
       </footer>
     </main>

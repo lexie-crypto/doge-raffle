@@ -2,18 +2,34 @@ import { parseAbi } from "viem";
 
 export const raffleAbi = parseAbi([
   "struct Bundle { uint32 tickets; uint224 price; }",
+  "struct Prize { uint256 amount; uint64 claimCutoff; uint8 status; }",
   "function buyTickets(uint256 bundleId) payable",
+  "function claimPrize(uint256 roundId)",
   "function withdrawPayout()",
   "function commitDraw()",
   "function finalizeDraw()",
   "function currentRoundId() view returns (uint256)",
-  "function rounds(uint256) view returns (uint64 startTime, uint64 endTime, uint64 randomnessBlock, uint8 status, uint96 totalTickets, uint256 pot, address winner, uint256 prize)",
+  "function rounds(uint256) view returns (uint64 startTime, uint64 endTime, uint64 randomnessBlock, uint8 status, uint16 feeBps, uint96 totalTickets, uint256 pot, address winner)",
+  "function prizeOf(uint256 roundId) view returns (Prize memory)",
   "function ticketsOf(uint256 roundId, address user) view returns (uint256)",
   "function allBundles() view returns (Bundle[])",
   "function withdrawable(address) view returns (uint256)",
+  "function pendingCarry() view returns (uint256)",
+  "function guaranteedPot() view returns (uint256)",
+  "function pendingRollover() view returns (uint256 amount, uint64 cutoff, bool stillClaimable)",
   "function canCommit() view returns (bool)",
   "function canFinalize() view returns (bool)",
-  "function feeBps() view returns (uint256)",
   "event TicketsPurchased(uint256 indexed roundId, address indexed buyer, uint256 bundleId, uint256 tickets, uint256 paid)",
-  "event WinnerDrawn(uint256 indexed roundId, address indexed winner, uint256 prize, uint256 fee, uint256 totalTickets)",
-]);
+  "event WinnerDrawn(uint256 indexed roundId, address indexed winner, uint256 prize, uint256 fee, uint256 grossPot, uint256 totalTickets)",
+  "event PrizeClaimable(uint256 indexed roundId, address indexed winner, uint256 amount, uint64 claimCutoff)",
+  "event PrizeClaimed(uint256 indexed roundId, address indexed winner, uint256 amount)",
+  "event PrizeRolledOver(uint256 indexed roundId, uint256 amount, uint256 indexed intoRoundId)",
+] as const);
+
+/** PrizeStatus enum mirror. */
+export const PrizeStatus = {
+  None: 0,
+  Claimable: 1,
+  Claimed: 2,
+  RolledOver: 3,
+} as const;
