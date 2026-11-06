@@ -8,6 +8,7 @@ export const raffleAbi = parseAbi([
   "function claimPrizeTo(uint256 roundId, address recipient)",
   "function withdrawPayout()",
   "function withdrawPayoutTo(address recipient)",
+  "function MIN_CLAIM_WINDOW() view returns (uint64)",
   "function commitDraw()",
   "function finalizeDraw()",
   "function currentRoundId() view returns (uint256)",

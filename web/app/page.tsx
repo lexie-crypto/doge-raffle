@@ -95,6 +95,15 @@ export default function Home() {
     functionName: "currentRoundId",
   });
 
+  // The active testnet raffle predates recipient-directed claims. Keep these
+  // actions hidden until the site points at a deployed contract with the fix.
+  const { data: minClaimWindow } = useReadContract({
+    ...raffle,
+    functionName: "MIN_CLAIM_WINDOW",
+    query: { retry: false },
+  });
+  const supportsRedirect = minClaimWindow === 7n * 24n * 60n * 60n;
+
   const { data: round, refetch: refetchRound } = useReadContract({
     ...raffle,
     functionName: "rounds",
@@ -446,7 +455,7 @@ export default function Home() {
                 <p className="mt-2 text-xs text-amber-900/70">
                   Sent straight to your wallet — you pay a tiny network fee.
                 </p>
-                <details className="mt-4 text-sm text-amber-950">
+                {supportsRedirect && <details className="mt-4 text-sm text-amber-950">
                   <summary className="cursor-pointer font-semibold underline">
                     Claim to another address
                   </summary>
@@ -475,7 +484,7 @@ export default function Home() {
                   >
                     Claim to this address
                   </button>
-                </details>
+                </details>}
               </div>
             </div>
           </section>
@@ -592,7 +601,7 @@ export default function Home() {
               >
                 Withdraw
               </button>
-              <details className="mt-3 text-sm text-emerald-900">
+              {supportsRedirect && <details className="mt-3 text-sm text-emerald-900">
                 <summary className="cursor-pointer font-semibold underline">Withdraw to another address</summary>
                 <p className="mt-2">Use this if your wallet rejects an incoming DOGE transfer.</p>
                 <input
@@ -616,7 +625,7 @@ export default function Home() {
                 >
                   Withdraw to this address
                 </button>
-              </details>
+              </details>}
             </div>
           )}
         </section>
