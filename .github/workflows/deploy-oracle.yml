@@ -16,6 +16,7 @@ on:
       - bot/package-lock.json
       - bot/Dockerfile
       - bot/fly.toml
+      - .github/workflows/deploy-oracle.yml
 
 concurrency:
   group: deploy-oracle
@@ -71,15 +72,33 @@ jobs:
             VRF_SECRET_KEY="$VRF_SECRET_KEY" \
             ORACLE_PRIVATE_KEY="$BOT_PRIVATE_KEY"
 
+      - name: Ensure exactly one machine
+        # Fly's launch UI creates 2 machines; two oracles would just race
+        # each other and double the cost. (No-op on a brand-new app.)
+        run: |
+          if [ "$(flyctl machine list --app "$APP" --json | jq length)" -gt 1 ]; then
+            flyctl scale count 1 --app "$APP" --yes
+          fi
+
       - name: Deploy (single always-on machine)
         # Uses bot/fly.toml: no http_service, so any web service/port 8080
         # health check created by Fly's launch UI is removed on deploy.
         run: flyctl deploy --app "$APP" --remote-only --ha=false
 
-      - name: Ensure exactly one machine
-        # Fly's launch UI creates 2 machines; two oracles would just race
-        # each other and double the cost.
-        run: flyctl scale count 1 --app "$APP" --yes
+      - name: Start the machine
+        # A deploy updates machines but leaves stopped ones stopped (e.g.
+        # after a crash loop); the oracle must always be running.
+        run: |
+          for id in $(flyctl machine list --app "$APP" --json | jq -r '.[] | select(.state != "started") | .id'); do
+            flyctl machine start "$id" --app "$APP"
+          done
 
-      - name: Show status
-        run: flyctl status --app "$APP"
+      - name: Check the oracle is running
+        run: |
+          sleep 20
+          flyctl status --app "$APP"
+          state=$(flyctl machine list --app "$APP" --json | jq -r '.[0].state')
+          echo "machine state: $state"
+          [ "$state" = "started" ] || { echo "::error::oracle machine is $state"; flyctl logs --app "$APP" --no-tail | tail -30; exit 1; }
+          flyctl logs --app "$APP" --no-tail | tail -15
+
