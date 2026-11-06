@@ -1,6 +1,6 @@
 # Doge Raffle 🐕
 
-A recurring DOGE raffle dApp for **DogeOS** (the EVM ZK-rollup app layer for Dogecoin). Users connect a wallet and buy tickets with DOGE; on the 1st of every month (00:00 UTC) a winner is drawn, weighted by tickets held. **Winners claim their own prize before a fixed deadline; unclaimed prizes roll into the next jackpot.**
+A recurring DOGE raffle dApp on **DogeOS** (the EVM ZK-rollup app layer for Dogecoin). Users connect a wallet and buy tickets with DOGE; on the 1st of every month (00:00 UTC) a winner is drawn, weighted by tickets held. **Winners claim their own prize before a fixed deadline; unclaimed prizes roll into the next jackpot.**
 
 > **Live on Chikyū testnet:**
 > - DogeRaffle: [`0x0B0024090b1a2BD99128654E0047BB27fE30D05C`](https://dogeos-testnet.l2scan.co/address/0x0B0024090b1a2BD99128654E0047BB27fE30D05C)
